@@ -358,6 +358,55 @@ APP → components → OSAL → BSP(本仓库的 pm_* 契约) → 芯片后端 �
 
 ---
 
+## 四层架构检查与 CI
+
+`tools/check_layering.py` 不是本仓写的，是
+[firmware-four-layer-architecture](https://github.com/BiscuiTs2026/firmware-four-layer-architecture)
+检查器的拷贝（v3.2.0，来源提交 `2bef49f`）。来源与同步信息记在 `tools/CHECKER.lock`
+和脚本头部；本仓只使用，**不修改判定规则**。
+
+本地运行（与 CI 门禁等价）：
+
+```bash
+python3 tools/check_layering.py . --roles .arch-roles
+```
+
+- 退出码 `0` = ERROR 数为 0；`1` = 存在 ERROR（或工程完全没有分层信息）；`2` = 用法/路径错误。
+- **ERROR** 是要修的问题：越层调用、未获准的反向依赖、跨模块全局变量、ISR 内阻塞调用、
+  链接脚本固定段冲突等。
+- **WARN** 是"需要人看，但按当前设计有意接受"的形态，只打印，不影响退出码与合并。
+
+当前基线：**0 ERROR / 14 WARN**。这 14 条 WARN 是同一类设计形态，不是待修问题：
+
+- 5 条：`src/port/stm32f1/pm_port_stm32f1.c` 第 29/33/36/39/42 行 include 组件层头文件
+  （`pm_uart.h` 等），只取句柄类型与 ISR 钩子声明，不调用组件公开 API；
+- 9 条：同文件第 379/389/401/756/768/1137/1141/1361/1370 行调用 `pm_*_hw_*` ISR 钩子，
+  这些钩子按契约只允许端口层在中断上下文调用。
+
+即：WARN 记录的是"依赖倒置 + 中断回投"这两条设计选择。WARN 数量或内容变化时，
+先确认没有新增真实的越层调用，再同步更新本节。
+
+### 升级检查器
+
+1. 在上游仓库取新提交，看 `skill/scripts/check_layering.py` 的 `checker-version`；
+2. 整文件覆盖 `tools/check_layering.py`；
+3. 改文件头 `source-commit` 与脚本内 `SOURCE_COMMIT`，同步 `tools/CHECKER.lock`
+   （`source-blob` 用 `git -C <上游仓> rev-parse HEAD:skill/scripts/check_layering.py`）；
+4. 本地跑一遍：ERROR 必须为 0；WARN 有变化就核对是否仍只覆盖上面两类形态；
+5. 提交信息写明旧版本 → 新版本与上游提交哈希。
+
+### CI
+
+`.github/workflows/ci.yml` 三个作业并列，任一失败都视为不可合并：
+
+| 作业 | Runner | 内容 |
+| --- | --- | --- |
+| 主机单测 | windows-latest | 构建并运行 `tests/host`，断言失败即非零退出 |
+| 固件构建 | ubuntu-latest | `gcc-arm-none-eabi` + CMake/Ninja 构建 `pm_f103_demo` |
+| 四层架构检查 | ubuntu-latest | `python3 tools/check_layering.py`，ERROR 必须为 0 |
+
+---
+
 ## 已知限制
 
 - DMA 抽象、RTC、Flash、看门狗尚未实现；
@@ -368,10 +417,10 @@ APP → components → OSAL → BSP(本仓库的 pm_* 契约) → 芯片后端 �
   （RM0008 允许输入浮空或上拉），SCK/MOSI 为复用推挽；未接从机，未上板验证；
 - 本板 SPI 硬件 NSS 引脚（PA4 / PB12）已被 NTC、KEY1 占用，`PM_SPI_NSS_HARD` 会返回 `PM_ERR_PARAM`，只能用 GPIO 软件片选；
 - I2C 只做主机、7 位地址、无 DMA；超时只复位外设，不做 SCL 脉冲总线恢复；
-  尚未在真实器件上验证（板载 OLED 0x7A 与 AHT20 0x70 可直接用于上板验证）；
+  AHT20（0x70）已验证命令触发型时序，板载 OLED（0x7A）未验证；
 - UART 目前是逐字节中断，尚未提供 DMA + 空闲中断的接收路径；
 - port 注册表无条件引用已实现外设的 ops：不用 SPI/I2C 也会链接对应驱动，后续可按需裁剪；
-- 尚未接入 CMake presets，尚未提供 CI；
+- 尚未接入 CMake presets（CI 已接入，见「四层架构检查与 CI」）；
 - 对象结构体布局不承诺 ABI 稳定。
 
 ## 第三方代码

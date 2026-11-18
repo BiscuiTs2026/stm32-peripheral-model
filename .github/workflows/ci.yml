@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host-tests:
+    name: 主机单测
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 配置
+        run: cmake -S tests/host -B build-host
+      - name: 构建
+        run: cmake --build build-host --config Release
+      - name: 运行
+        run: build-host\Release\pm_host_tests.exe
+
+  firmware:
+    name: 固件构建
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 安装 arm-none-eabi-gcc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-arm-none-eabi libnewlib-arm-none-eabi ninja-build
+      - name: 配置
+        run: cmake -S . -B build-arm -G Ninja -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/arm-gcc-toolchain.cmake"
+      - name: 构建
+        run: cmake --build build-arm
+
+  layering:
+    name: 四层架构检查（ERROR 必须为 0）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 运行检查器
+        # 退出码即门禁：0 = 无 ERROR，1 = 有 ERROR。WARN 只打印，不改变退出码。
+        run: python3 tools/check_layering.py . --roles .arch-roles

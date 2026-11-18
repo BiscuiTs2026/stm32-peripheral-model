@@ -1,0 +1,12 @@
+# 检查器锁文件：登记 tools/check_layering.py 的来源，供升级/同步时核对。
+# 升级时同时改本文件、脚本头部的 source-commit 与脚本里的 SOURCE_COMMIT。
+# 说明：上游 v3.2.0 的 docstring 里提到 `--version` / `--lock`，
+#       但当前提交的 argparse 并没有实现这两个选项（只有 root/--roles/--glue-max-lines/
+#       --max-per-file/--no-linker/--allow-unlayered），所以本文件目前只作记录，
+#       无法用 `--lock` 自动校验；等上游实现后再接入。
+
+source-repo:    https://github.com/BiscuiTs2026/firmware-four-layer-architecture
+checker-version: 3.2.0
+source-commit:  2bef49f9e95c2debcdf2cd221ec40e16a4ce09fd
+source-blob:    14a4de372a06cadcaf8e1cddd0ecd5436490371f
+synced-at:      2026-11-18
