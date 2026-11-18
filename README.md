@@ -5,7 +5,7 @@
 一套按"接口契约优先"方式组织的 STM32F1 外设代码：上层只依赖 `include/pm/` 里的公共 API，芯片相关的一切都收敛在 port 层。目标是换板子只改一张引脚表，换芯片只换一个 port 目录，核心逻辑永远能在主机上跑单测。
 
 当前版本 **v0.4**，配套 STM32F103C8T6 最小系统板（72 MHz、20 KB RAM、64 KB Flash）。
-已实现 GPIO、UART、SPI（主机全双工，中断 + 可选 DMA）、I2C（主机，中断状态机，支持写读合并）、ADC（单通道单次转换，EOC 中断）与 PWM（定时器比较输出）。
+已实现 GPIO、UART、SPI（主机全双工，中断 + 可选 DMA）、I2C（主机，中断状态机，支持写读合并；repeated START 仅适用于寄存器型器件）、ADC（单通道单次转换，EOC 中断）与 PWM（定时器比较输出）。
 
 ## 能做什么
 
@@ -22,11 +22,11 @@
 | 外设 | 尚未验证的部分 |
 | --- | --- |
 | SPI | 未接从机；只验证了主机初始化、中断/DMA 收发路径与主机 mock |
-| I2C | 未接真实器件；本板板载 OLED（0x7A）与 AHT20（0x70）可直接用于验证 |
+| I2C | 已用板载 AHT20（0x70）验证读时序；OLED（0x7A）未验证 |
 | ADC | 未接真实信号源；只验证了转换流程与主机 mock |
 | PWM | 未接负载（电机 / 舵机 / 蜂鸣器）；只验证了配置与占空比换算 |
 
-已在真实板卡上验证的只有：时钟（HSE→PLL 72 MHz）与 UART 收发。
+已在真实板卡上验证的只有：时钟（HSE→PLL 72 MHz）、UART 收发，以及 I2C 对 AHT20 的读时序。
 
 此外当前不提供：DMA 通用抽象、RTC、Flash、看门狗、FreeRTOS 集成、CI、CMake presets；
 同一硬件定时器的通道共享周期，不同频率同时使用会返回 `PM_ERR_BUSY`。
@@ -44,28 +44,34 @@
 | 主机单测 | 通过 | 345 项断言，0 失败（MSVC 19.51，C11） |
 | 动态分配 | 不存在 | `nm` 中无 `malloc` / `free` / `_sbrk` |
 | 向量表 | 正确 | 首字 `0x20005000`（20 KB RAM 顶），Reset_Handler `0x08000229`（Thumb） |
-| **上板运行** | **部分验证** | 时钟与 UART 收发已在真实板卡上验证；I2C、SPI、ADC、PWM 未接真实器件/负载 |
+| **上板运行** | **部分验证** | 时钟与 UART 收发已在真实板卡上验证；I2C 已用板载 AHT20（0x70）验证触发/读取时序；SPI、ADC、PWM 未接真实器件/负载 |
 
 未做上板验证的部分不写成"可用"。
 
 **I2C 器件事实**（针对本板）：本板 I2C1 上的 OLED（0x7A，驱动芯片 CH1116）与 AHT20
 温湿度传感器（0x70）都是**板载器件**，不是外部模块；另有一个 I2C 排针与两者共用 PB6/PB7。
-因此 I2C 可以直接用板载器件验证，但目前**尚未在真实器件上验证**。
+因此 I2C 可以直接用板载器件验证。AHT20 已用于验证"命令触发型器件"的时序
+（触发写 + STOP → 等待 → 读，见 `docs/00-contract.md` §12.3）；OLED 尚未验证。
 
 ### Flash/RAM 增量
 
 | 版本 | 内容 | Flash | RAM | 相对上一版 |
 | --- | --- | --- | --- | --- |
-| v0.1 | GPIO + UART | 6440 B（9.83%） | 2224 B（10.86%） | — |
-| v0.2 | + SPI（IT + DMA） | 11704 B（17.86%） | 2728 B（13.32%） | +5264 B / +504 B |
-| v0.3 | + 时钟树修复、UART RX 与 SPI MISO 引脚修复、I2C | 18872 B（28.80%） | 2840 B（13.87%） | +7168 B / +112 B |
-| v0.4 | + ADC（单次转换）与 PWM（TIM2/TIM4 比较输出） | 24424 B（37.27%） | 3104 B（15.16%） | +5552 B / +264 B |
+| v0.1 | GPIO + UART | 7848 B（11.98%） | 2224 B（10.86%） | — |
+| v0.2 | + SPI（IT + DMA） | 13104 B（20.00%） | 2728 B（13.32%） | +5256 B / +504 B |
+| v0.3 | + UART RX 与 SPI MISO 引脚修复、I2C | 18896 B（28.83%） | 2840 B（13.87%） | +5792 B / +112 B |
+| v0.4 | + ADC（单次转换）与 PWM（TIM2/TIM4 比较输出） | 24424 B（37.27%） | 3104 B（15.16%） | +5528 B / +264 B |
 
-v0.3 的 Flash 增量主要来自 HAL I2C 状态机（`HAL_I2C_EV_IRQHandler` 2228 B、
+四行都在对应提交上重新 checkout、用全新构建目录实测，不是按差值推算。旧表中的
+v0.1–v0.3 三行（6440 / 11704 / 18872 B）无法复现，已按实测值更正；时钟代码
+（HSE→PLL）在四个版本中相同，不再计入 v0.3 的增量。
+
+v0.3 的 +5792 B 主要来自 HAL I2C 状态机（`HAL_I2C_EV_IRQHandler` 2228 B、
 `HAL_I2C_Init` 336 B、`HAL_I2C_ER_IRQHandler` 320 B、四个 `Master_*_IT` 共 828 B）
-与 `HAL_RCC_OscConfig` 824 B + `HAL_RCC_ClockConfig` 312 B；模型与端口胶水约 1 KB。
+与模型/端口胶水（约 1 KB），其余为零星代码差异。
 RAM 的 +112 B 是静态 `I2C_HandleTypeDef` 与端口状态（`s_i2c`，`nm` 显示 0x70）。
-由于端口注册表无条件引用已实现外设的 ops，**即使 APP 不用 I2C/SPI，这部分代码也会被链接**。
+模块是否参与构建由 CMake 按"头文件 + 核心源文件是否存在"判定；模块存在就会被注册，
+**即使 APP 不用 I2C/SPI，这部分代码也会被链接**（v0.4 四个模块都在）。
 
 v0.4 的 Flash 增量来自 HAL ADC（`HAL_ADC_Init`、`HAL_ADC_Start_IT`、
 `HAL_ADC_IRQHandler`、`HAL_ADCEx_Calibration_Start`）与 HAL TIM PWM
@@ -73,6 +79,21 @@ v0.4 的 Flash 增量来自 HAL ADC（`HAL_ADC_Init`、`HAL_ADC_Start_IT`、
 以及模型/端口胶水。RAM 的 +264 B 主要是 `ADC_HandleTypeDef`、`TIM_HandleTypeDef`
 与端口静态状态（`s_adc`、`s_pwm_timer[2]`、`s_pwm[4]`）。同样地，APP 不用 ADC/PWM
 时这部分也会被链接。
+
+> **复核命令**（在仓库里把 `<commit>` 换成对应版本，工具链路径按本机调整）：
+>
+> ```powershell
+> git switch --detach <commit>
+> cmake -S . -B build-arm -G Ninja `
+>       -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/arm-gcc-toolchain.cmake" `
+>       -DTOOLCHAIN_ROOT="<cube>/gnu-tools-for-stm32/14.3.1+st.2/bin"
+> cmake --build build-arm
+> arm-none-eabi-size build-arm/pm_f103_demo
+> ```
+>
+> Flash/RAM 取链接器打印的 `Memory region` 表（`.bin` 大小与 Flash 占用一致）。
+> 对应提交：v0.1 `aa342e5`、v0.2 `917cc09`、v0.3 `7bde865`；v0.4 为 `main` 最新提交
+> （本次只改文档，源码未变，占用仍为 24424 B / 3104 B）。
 
 ---
 
@@ -250,7 +271,11 @@ while (pm_i2c_poll(&s_i2c, &evt, NULL, NULL)) {
 - 不用 HAL 的阻塞版本：字节推进全部由 I2C 事件中断完成，模型只做有界等待；
 - `timeout == 0` 时立即返回 `PM_ERR_AGAIN`，缓冲区在 `I2C_DONE/I2C_ERROR` 被 poll 到之前归驱动借用；
 - 超时通过 `HAL_I2C_DeInit + Init` 复位外设，`done` 报告已移动字节数；**不做总线清除**；
-- 实际 SCL 由 `pm_i2c_clock_hz()` 从 CCR 与 PCLK1 反算，不是回显请求值。
+- 实际 SCL 由 `pm_i2c_clock_hz()` 从 CCR 与 PCLK1 反算，不是回显请求值；
+- `pm_i2c_write_read` 的 repeated START 只适用于**寄存器型**器件（写寄存器地址后直接读）；
+- **命令触发型**器件（AHT20 等：写一条命令即开始内部转换）必须
+  `pm_i2c_write`（STOP 结束）→ `pm_osal_delay_ms()` → `pm_i2c_read`。
+  用 `write_read` 会读到上一次结果，并可能带假忙位（板端实测见 `docs/00-contract.md` §12.3）。
 
 完整规则见 [docs/00-contract.md](docs/00-contract.md) 第 12 节。
 
