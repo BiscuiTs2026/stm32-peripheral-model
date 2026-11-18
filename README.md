@@ -362,15 +362,18 @@ APP → components → OSAL → BSP(本仓库的 pm_* 契约) → 芯片后端 �
 
 `tools/check_layering.py` 不是本仓写的，是
 [firmware-four-layer-architecture](https://github.com/BiscuiTs2026/firmware-four-layer-architecture)
-检查器的拷贝（上游提交 `2bef49f`，文件自述 v3，无版本常量）。来源与同步信息记在 `tools/CHECKER.lock`
-和脚本头部；本仓只使用，**不修改判定规则**。
+检查器的**单文件拷贝**（上游提交 `af88491`，文件自述 v3.2.0）。来源与同步信息记在
+`tools/CHECKER.lock`（版本、来源仓、来源提交、上游 blob、同步日期、本地补丁）；本仓除
+文件头 `source-commit` 与 `SOURCE_COMMIT` 常量外不改脚本，**不修改判定规则**。
 
-本地运行（与 CI 门禁等价）：
+本地运行（与 CI 门禁等价，两条都要过）：
 
 ```bash
+python3 tools/check_layering.py --version --lock tools/CHECKER.lock
 python3 tools/check_layering.py . --roles .arch-roles
 ```
 
+第一条比对文件头与锁文件，任一不一致退出 `1`。扫描命令的退出码：
 - 退出码 `0` = ERROR 数为 0；`1` = 存在 ERROR（或工程完全没有分层信息）；`2` = 用法/路径错误。
 - **ERROR** 是要修的问题：越层调用、未获准的反向依赖、跨模块全局变量、ISR 内阻塞调用、
   链接脚本固定段冲突等。
@@ -386,15 +389,23 @@ python3 tools/check_layering.py . --roles .arch-roles
 即：WARN 记录的是"依赖倒置 + 中断回投"这两条设计选择。WARN 数量或内容变化时，
 先确认没有新增真实的越层调用，再同步更新本节。
 
+`.arch-roles` 用两条 `ignore` 跳过非本仓代码：`ignore = third_party/`（CMSIS 与 ST HAL
+子集，厂商代码不参与分层，上游也推荐忽略而非映射成 `bsp`）与 `ignore = build-*/`
+（CMake 构建目录）。忽略范围只有这两类，不含任何本仓源码或测试。
+实测扫描耗时从 42.7 s 降到 0.24 s（三次 235 / 236 / 248 ms），ERROR/WARN 计数与逐条内容不变。
+
 ### 升级检查器
 
-1. 在上游仓库取新提交（**用干净工作树或 `git show <commit>:skill/scripts/check_layering.py`，
-   不要拷别人正在编辑的工作副本**）；
+1. 在上游仓库取新提交（**用 `git worktree add --detach <commit>` 或
+   `git show <commit>:skill/scripts/check_layering.py`，不要拷别人正在编辑的工作副本**）；
 2. 整文件覆盖 `tools/check_layering.py`；
-3. 改文件头的 `source-commit`，同步 `tools/CHECKER.lock`
-   （`source-blob` 用 `git -C <上游仓> rev-parse <commit>:skill/scripts/check_layering.py`）；
-4. 本地跑一遍：ERROR 必须为 0；WARN 有变化就核对是否仍只覆盖上面两类形态；
-5. 提交信息写明旧版本 → 新版本与上游提交哈希。
+3. 改文件头 `source-commit` **和 `SOURCE_COMMIT` 常量**——`--version` 打印的是常量，
+   只改注释会被锁文件校验抓到；
+4. 更新 `tools/CHECKER.lock`：`checker-version`、`source-commit`、`source-blob`
+   （`git -C <上游仓> rev-parse <commit>:skill/scripts/check_layering.py`）、`synced-at`；
+   `local-patches` 保持 `none`，确要本地改就在此写清原因与上游 issue；
+5. 本地跑上面两条命令：版本一致、ERROR 必须为 0；WARN 有变化就核对是否仍只覆盖上面两类形态；
+6. 提交信息写明旧版本 → 新版本与上游提交哈希。
 
 ### CI
 
@@ -404,7 +415,7 @@ python3 tools/check_layering.py . --roles .arch-roles
 | --- | --- | --- |
 | 主机单测 | windows-latest | 构建并运行 `tests/host`，断言失败即非零退出 |
 | 固件构建 | ubuntu-latest | `gcc-arm-none-eabi` + CMake/Ninja 构建 `pm_f103_demo` |
-| 四层架构检查 | ubuntu-latest | `python3 tools/check_layering.py`，ERROR 必须为 0 |
+| 四层架构检查 | ubuntu-latest | 先 `--version --lock` 校验无漂移，再扫描；任一步非零即失败 |
 
 ---
 

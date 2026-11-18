@@ -2,6 +2,12 @@
 # 语法：<模式> = <角色>；模式含 "/" 时匹配相对路径，不含 "/" 时只匹配文件名。
 # 依赖方向：app → components → osal → bsp；glue 只做初始化与中断分发。
 
+# 第三方与构建产物：不参与分层判定。
+# third_party/ 是 CMSIS 与 ST HAL 子集，属于厂商代码，忽略而不是映射成 bsp
+# （上游 docs/integration.md 第 5 节：映射成 bsp 会导致每次解析整套厂商包）。
+ignore = third_party/
+ignore = build-*/
+
 # 各层自己的公共接口头，归各自层（否则实现方 include 自己的接口会被判成越层）
 include/pm/pm_osal.h = osal
 include/pm/pm_port.h = bsp
@@ -23,7 +29,3 @@ src/port/stm32f1/*  = bsp
 # 板级引脚表、启动文件、链接脚本、HAL 配置、演示入口
 platform/*          = glue
 src/app/main.c      = glue
-
-# 第三方厂商代码不参与应用分层，按最底层 bsp 处理，
-# 避免把 CMSIS/HAL 自身当成"上层代码"审查。
-third_party/*       = bsp

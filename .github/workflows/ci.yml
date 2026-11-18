@@ -38,10 +38,13 @@ jobs:
         run: cmake --build build-arm
 
   layering:
-    name: 四层架构检查（ERROR 必须为 0）
+    name: 四层架构检查（版本不漂移 + ERROR 必须为 0）
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: 检查器版本漂移
+        # 文件头 source-commit / checker-version / source-repo 与 tools/CHECKER.lock 任一不一致即失败（退出码 1）。
+        run: python3 tools/check_layering.py --version --lock tools/CHECKER.lock
       - name: 运行检查器
         # 退出码即门禁：0 = 无 ERROR，1 = 有 ERROR。WARN 只打印，不改变退出码。
         run: python3 tools/check_layering.py . --roles .arch-roles

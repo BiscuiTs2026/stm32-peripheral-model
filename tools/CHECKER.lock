@@ -1,11 +1,12 @@
-# 检查器锁文件：登记 tools/check_layering.py 的来源，供升级/同步时核对。
-# 升级时同时改本文件与脚本头部的 source-commit。
-#
-# 注意：上游工作副本可能带着未提交的改动（本项目同步时就遇到过：
-# 上游 skill/scripts/check_layering.py 有 1000+ 行未提交修改，而 HEAD 只有 908 行）。
-# 因此拷贝一律以“干净的工作树/指定提交”为准，不用别人正在编辑的工作副本。
-
-source-repo:   https://github.com/BiscuiTs2026/firmware-four-layer-architecture
-source-commit: 2bef49f9e95c2debcdf2cd221ec40e16a4ce09fd
-source-blob:   14a4de372a06cadcaf8e1cddd0ecd5436490371f
-synced-at:     2026-11-18
+# 上游检查器锁文件：改这里等于声明"我升到了某个版本"
+checker-version = 3.2.0
+source-repo     = https://github.com/BiscuiTs2026/firmware-four-layer-architecture
+source-commit   = af884914c4cdc23472a20382a32df4a9e8305ce5
+source-blob     = 0c16afe694f2b3b1b5cbd211d1d055db9cb1af9d
+synced-at       = 2026-11-18
+local-patches   = none
+# source-blob 是上游 af88491:skill/scripts/check_layering.py 的 git blob；
+# 本地文件除 # source-commit 行与 SOURCE_COMMIT 常量外与上游逐字一致。
+# 升级步骤：覆盖 tools/check_layering.py → 改文件头 source-commit 与 SOURCE_COMMIT → 改本文件三处 → 本地跑
+#   python3 tools/check_layering.py --version --lock tools/CHECKER.lock
+# 通过后再提交；CI 第一步同一命令即版本漂移门禁。
