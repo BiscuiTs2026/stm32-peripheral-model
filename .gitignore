@@ -1,0 +1,21 @@
+# Build outputs
+build*/
+*.o
+*.d
+*.a
+*.elf
+*.bin
+*.hex
+*.map
+
+# Local logs / caches
+*.log
+compile_commands.json
+.cache/
+
+# Editor / OS
+.vs/
+.vscode/
+*.user
+Thumbs.db
+desktop.ini

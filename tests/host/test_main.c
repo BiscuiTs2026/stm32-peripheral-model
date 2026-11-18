@@ -1,0 +1,1108 @@
+﻿/*
+ * test_main.c - host-side tests for the vendor-free core.
+ *
+ * The same src/core/*.c files that are compiled into the firmware are
+ * compiled here against a mock port and a host OSAL. No hardware involved.
+ */
+#include <stdio.h>
+#include <string.h>
+
+#include "pm_err.h"
+#include "pm_ringbuf.h"
+#include "pm_event.h"
+#include "pm_gpio.h"
+#include "pm_uart.h"
+#if defined(PM_ENABLE_SPI)
+#include "pm_spi.h"
+#endif
+#if defined(PM_ENABLE_I2C)
+#include "pm_i2c.h"
+#endif
+#if defined(PM_ENABLE_ADC)
+#include "pm_adc.h"
+#endif
+#if defined(PM_ENABLE_PWM)
+#include "pm_pwm.h"
+#endif
+#include "pm_port_mock.h"
+
+void host_time_advance(uint32_t ms);
+void host_time_reset(void);
+
+static int s_failures;
+static int s_checks;
+
+#define CHECK(cond)                                                          \
+    do {                                                                     \
+        s_checks++;                                                          \
+        if (!(cond)) {                                                       \
+            printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond);           \
+            s_failures++;                                                    \
+        }                                                                    \
+    } while (0)
+
+/* --------------------------------------------------------------- ringbuf */
+
+static void test_ringbuf(void)
+{
+    uint8_t storage[8];
+    pm_ringbuf_t rb;
+    uint8_t out[8];
+    uint8_t src[16];
+
+    CHECK(pm_rb_init(NULL, storage, 8) == PM_ERR_NULL);
+    CHECK(pm_rb_init(&rb, NULL, 8) == PM_ERR_NULL);
+    CHECK(pm_rb_init(&rb, storage, 3) == PM_ERR_PARAM);      /* not power of 2 */
+    CHECK(pm_rb_init(&rb, storage, 0) == PM_ERR_PARAM);
+    CHECK(pm_rb_init(&rb, storage, 8) == PM_OK);
+
+    CHECK(pm_rb_free(&rb) == 7);                             /* one slot reserved */
+    memset(src, 0xA5, sizeof(src));
+    CHECK(pm_rb_write(&rb, src, 5) == 5);
+    CHECK(pm_rb_used(&rb) == 5);
+    CHECK(pm_rb_free(&rb) == 2);
+
+    CHECK(pm_rb_write(&rb, src, 5) == 2);                    /* only 2 slots left */
+    CHECK(pm_rb_dropped(&rb) == 3);
+
+    CHECK(pm_rb_read(&rb, out, sizeof(out)) == 7);
+    CHECK(out[0] == 0xA5);
+    CHECK(pm_rb_used(&rb) == 0);
+    CHECK(pm_rb_read(&rb, out, sizeof(out)) == 0);
+
+    /* Wrap-around: write/read several times so head passes the end. */
+    CHECK(pm_rb_write(&rb, src, 6) == 6);
+    CHECK(pm_rb_read(&rb, out, 4) == 4);
+    CHECK(pm_rb_write(&rb, src, 5) == 5);
+    CHECK(pm_rb_read(&rb, out, 8) == 7);
+    CHECK(pm_rb_used(&rb) == 0);
+
+    /* consume() advances the tail without copying. */
+    CHECK(pm_rb_write(&rb, src, 7) == 7);
+    pm_rb_consume(&rb, 3);
+    CHECK(pm_rb_used(&rb) == 4);
+    pm_rb_consume(&rb, 100);                                 /* clamps */
+    CHECK(pm_rb_used(&rb) == 0);
+}
+
+/* ----------------------------------------------------------------- evtq */
+
+static void test_evtq(void)
+{
+    pm_evtq_t q;
+    pm_evt_t e;
+
+    pm_evtq_init(&q);
+
+    pm_evtq_push(&q, PM_EVT_UART_RX_DATA, 1u, 0u);
+    pm_evtq_push(&q, PM_EVT_UART_RX_DATA, 1u, 0u);           /* de-duplicated */
+    CHECK(pm_evtq_pop(&q, &e) == true);
+    CHECK(e.id == PM_EVT_UART_RX_DATA);
+    CHECK(pm_evtq_pop(&q, &e) == false);
+
+    pm_evtq_push(&q, PM_EVT_UART_RX_DATA, 1u, 0u);
+    pm_evtq_push(&q, PM_EVT_UART_RX_DATA, 2u, 0u);           /* different src */
+    CHECK(pm_evtq_pop(&q, &e) == true);
+    CHECK(e.src == 1u);
+    CHECK(pm_evtq_pop(&q, &e) == true);
+    CHECK(e.src == 2u);
+
+    /* Fill beyond depth: the newest is dropped and counted.
+     * Capacity is PM_EVTQ_DEPTH-1 because one slot separates empty from full. */
+    for (uint8_t i = 0u; i < PM_EVTQ_DEPTH + 4u; i++) {
+        pm_evtq_push(&q, PM_EVT_UART_ERROR, i, 0u);
+    }
+    CHECK(pm_evtq_dropped(&q) == 5u);
+    {
+        uint8_t n = 0u;
+        while (pm_evtq_pop(&q, &e)) {
+            n++;
+        }
+        CHECK(n == PM_EVTQ_DEPTH - 1u);                      /* one slot reserved */
+    }
+}
+
+/* ----------------------------------------------------------------- gpio */
+
+static void test_gpio(void)
+{
+    pm_gpio_pin_t pin0;
+    pm_gpio_pin_t bad;
+    pm_gpio_level_t level;
+    pm_gpio_cfg_t cfg;
+
+    mock_reset();
+    pin0.id = 0u;
+    bad.id  = 99u;
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.dir = PM_GPIO_DIR_OUT;
+    cfg.initial_level = PM_GPIO_LEVEL_HIGH;
+
+    CHECK(pm_gpio_configure(pin0, NULL) == PM_ERR_NULL);
+    CHECK(pm_gpio_configure(bad, &cfg) == PM_ERR_RANGE);
+    CHECK(pm_gpio_configure(pin0, &cfg) == PM_OK);
+    CHECK(mock_gpio_is_configured(0u) == 1);
+    CHECK(mock_gpio_level(0u) == PM_GPIO_LEVEL_HIGH);
+
+    CHECK(pm_gpio_write(pin0, PM_GPIO_LEVEL_LOW) == PM_OK);
+    CHECK(pm_gpio_read(pin0, &level) == PM_OK);
+    CHECK(level == PM_GPIO_LEVEL_LOW);
+
+    CHECK(pm_gpio_toggle(pin0) == PM_OK);
+    CHECK(pm_gpio_read(pin0, &level) == PM_OK);
+    CHECK(level == PM_GPIO_LEVEL_HIGH);
+
+    CHECK(pm_gpio_read(pin0, NULL) == PM_ERR_NULL);
+    CHECK(pm_gpio_read(bad, &level) == PM_ERR_RANGE);
+    CHECK(level == PM_GPIO_LEVEL_LOW);      /* output defined on error */
+}
+
+/* ----------------------------------------------------------------- uart */
+
+static pm_uart_t s_uart;
+static uint8_t   s_rx[64];
+static uint8_t   s_tx[64];
+
+static void make_cfg(pm_uart_cfg_t *cfg)
+{
+    memset(cfg, 0, sizeof(*cfg));
+    cfg->hw_id      = 1u;
+    cfg->baudrate   = 115200u;
+    cfg->parity     = PM_UART_PARITY_NONE;
+    cfg->stop_bits  = PM_UART_STOP_1;
+    cfg->data_bits  = 8u;
+    cfg->rx_storage = s_rx;
+    cfg->rx_size    = (uint16_t)sizeof(s_rx);
+    cfg->tx_storage = s_tx;
+    cfg->tx_size    = (uint16_t)sizeof(s_tx);
+}
+
+static int s_cb_count;
+static pm_evt_id_t s_last_evt;
+
+static void on_event(pm_uart_t *u, const pm_evt_t *evt, void *ctx)
+{
+    (void)u;
+    (void)ctx;
+    s_cb_count++;
+    s_last_evt = evt->id;
+}
+
+static void test_uart_validation(void)
+{
+    pm_uart_cfg_t cfg;
+
+    mock_reset();
+    memset(&s_uart, 0, sizeof(s_uart));
+    make_cfg(&cfg);
+
+    CHECK(pm_uart_init(NULL, &cfg) == PM_ERR_NULL);
+    CHECK(pm_uart_init(&s_uart, NULL) == PM_ERR_NULL);
+
+    cfg.baudrate = 0u;
+    CHECK(pm_uart_init(&s_uart, &cfg) == PM_ERR_PARAM);
+
+    make_cfg(&cfg);
+    cfg.data_bits = 9u;
+    CHECK(pm_uart_init(&s_uart, &cfg) == PM_ERR_PARAM);
+
+    make_cfg(&cfg);
+    cfg.rx_size = 48u;                       /* not a power of two */
+    CHECK(pm_uart_init(&s_uart, &cfg) == PM_ERR_PARAM);
+
+    make_cfg(&cfg);
+    cfg.hw_id = 9u;
+    CHECK(pm_uart_init(&s_uart, &cfg) == PM_ERR_RANGE);
+
+    make_cfg(&cfg);
+    CHECK(pm_uart_init(&s_uart, &cfg) == PM_OK);
+    CHECK(mock_uart_is_open(1u) == 1);
+
+    /* A second init on the same hardware instance is a lifecycle error. */
+    CHECK(pm_uart_init(&s_uart, &cfg) == PM_ERR_BUSY);
+
+    CHECK(pm_uart_deinit(&s_uart) == PM_OK);
+    CHECK(mock_uart_is_open(1u) == 0);
+    CHECK(pm_uart_deinit(&s_uart) == PM_OK);     /* idempotent */
+}
+
+static void test_uart_tx(void)
+{
+    pm_uart_cfg_t cfg;
+    pm_uart_stats_t stats;
+    pm_evt_t evt;
+    size_t written = 0u;
+    static const uint8_t msg[] = "hello";
+
+    mock_reset();
+    memset(&s_uart, 0, sizeof(s_uart));
+    host_time_reset();
+    s_cb_count = 0;
+    make_cfg(&cfg);
+
+    CHECK(pm_uart_init(&s_uart, &cfg) == PM_OK);
+    CHECK(pm_uart_write(&s_uart, msg, sizeof(msg) - 1u, &written,
+                        PM_UART_TIMEOUT_NOW) == PM_OK);
+    CHECK(written == 5u);
+    CHECK(mock_uart_tx_len() == 5u);
+    CHECK(memcmp(mock_uart_tx_data(), "hello", 5u) == 0);
+
+    /* Nothing is consumed from the ring until the TX interrupt fires. */
+    CHECK(pm_uart_get_stats(&s_uart, &stats) == PM_OK);
+    CHECK(stats.tx_bytes == 0u);
+
+    pm_uart_hw_tx_complete(&s_uart);
+    CHECK(pm_uart_get_stats(&s_uart, &stats) == PM_OK);
+    CHECK(stats.tx_bytes == 5u);
+
+    CHECK(pm_uart_poll(&s_uart, &evt, NULL, NULL) == true);
+    CHECK(evt.id == PM_EVT_UART_TX_DONE);
+    CHECK(pm_uart_poll(&s_uart, &evt, NULL, NULL) == false);
+
+    /* Callback path: runs on poll, never in the "ISR". */
+    (void)pm_uart_write(&s_uart, msg, 1u, NULL, PM_UART_TIMEOUT_NOW);
+    pm_uart_hw_tx_complete(&s_uart);
+    CHECK(s_cb_count == 0);
+    CHECK(pm_uart_poll(&s_uart, NULL, on_event, NULL) == true);
+    CHECK(s_cb_count == 1);
+    CHECK(s_last_evt == PM_EVT_UART_TX_DONE);
+}
+
+static void test_uart_rx(void)
+{
+    pm_uart_cfg_t cfg;
+    pm_uart_stats_t stats;
+    pm_evt_t evt;
+    uint8_t buf[8];
+    size_t got = 0u;
+
+    mock_reset();
+    memset(&s_uart, 0, sizeof(s_uart));
+    make_cfg(&cfg);
+    CHECK(pm_uart_init(&s_uart, &cfg) == PM_OK);
+
+    CHECK(pm_uart_read(&s_uart, buf, sizeof(buf), &got) == PM_ERR_AGAIN);
+    CHECK(got == 0u);
+
+    pm_uart_hw_rx_byte(&s_uart, 'A');      /* pretending to be the RX ISR */
+    pm_uart_hw_rx_byte(&s_uart, 'B');
+
+    CHECK(pm_uart_poll(&s_uart, &evt, NULL, NULL) == true);
+    CHECK(evt.id == PM_EVT_UART_RX_DATA);
+    CHECK(pm_uart_poll(&s_uart, &evt, NULL, NULL) == false);   /* de-duplicated */
+
+    CHECK(pm_uart_read(&s_uart, buf, sizeof(buf), &got) == PM_OK);
+    CHECK(got == 2u);
+    CHECK(buf[0] == 'A');
+    CHECK(buf[1] == 'B');
+
+    CHECK(pm_uart_get_stats(&s_uart, &stats) == PM_OK);
+    CHECK(stats.rx_bytes == 2u);
+    CHECK(stats.rx_dropped == 0u);
+
+    CHECK(pm_uart_flush_rx(&s_uart) == PM_OK);
+    CHECK(pm_uart_read(&s_uart, buf, sizeof(buf), &got) == PM_ERR_AGAIN);
+}
+
+static void test_uart_timeout(void)
+{
+    pm_uart_cfg_t cfg;
+    pm_uart_stats_t stats;
+    uint8_t big[200];
+    size_t written = 0u;
+
+    memset(big, 0x5A, sizeof(big));
+    mock_reset();
+    memset(&s_uart, 0, sizeof(s_uart));
+    host_time_reset();
+    make_cfg(&cfg);
+
+    CHECK(pm_uart_init(&s_uart, &cfg) == PM_OK);
+
+    /* Ring capacity is 63 bytes after reserving one slot. */
+    CHECK(pm_uart_write(&s_uart, big, sizeof(big), &written,
+                        PM_UART_TIMEOUT_NOW) == PM_ERR_AGAIN);
+    CHECK(written == 63u);
+
+    CHECK(pm_uart_get_stats(&s_uart, &stats) == PM_OK);
+    CHECK(stats.tx_dropped == 200u - 63u);
+
+    /* Blocking form: the mock never completes TX, so it must time out. */
+    CHECK(pm_uart_write(&s_uart, big, sizeof(big), &written, 20u) == PM_ERR_TIMEOUT);
+    CHECK(written == 0u);
+}
+
+#if defined(PM_ENABLE_SPI)
+/* ------------------------------------------------------------------ spi */
+
+static pm_spi_t s_spi;
+static uint8_t  s_spi_tx[32];
+static uint8_t  s_spi_rx[32];
+
+static void make_spi_cfg(pm_spi_cfg_t *cfg)
+{
+    memset(cfg, 0, sizeof(*cfg));
+    cfg->hw_id     = 1u;
+    cfg->clock_hz  = 1000000u;
+    cfg->mode      = PM_SPI_MODE_0;
+    cfg->bit_order = PM_SPI_MSB_FIRST;
+    cfg->nss       = PM_SPI_NSS_SOFT;
+    cfg->use_dma   = false;
+}
+
+static void fill_spi_buffers(uint8_t len)
+{
+    uint8_t i;
+
+    for (i = 0u; i < len; i++) {
+        s_spi_tx[i] = (uint8_t)(0x10u + i);
+        s_spi_rx[i] = 0u;
+    }
+}
+
+static void test_spi_validation(void)
+{
+    pm_spi_cfg_t cfg;
+
+    mock_reset();
+    memset(&s_spi, 0, sizeof(s_spi));
+    make_spi_cfg(&cfg);
+
+    CHECK(pm_spi_init(NULL, &cfg) == PM_ERR_NULL);
+    CHECK(pm_spi_init(&s_spi, NULL) == PM_ERR_NULL);
+
+    cfg.clock_hz = 0u;
+    CHECK(pm_spi_init(&s_spi, &cfg) == PM_ERR_PARAM);
+
+    make_spi_cfg(&cfg);
+    cfg.mode = (pm_spi_mode_t)7;
+    CHECK(pm_spi_init(&s_spi, &cfg) == PM_ERR_PARAM);
+
+    make_spi_cfg(&cfg);
+    cfg.bit_order = (pm_spi_bit_order_t)3;
+    CHECK(pm_spi_init(&s_spi, &cfg) == PM_ERR_PARAM);
+
+    make_spi_cfg(&cfg);
+    cfg.hw_id = 9u;
+    CHECK(pm_spi_init(&s_spi, &cfg) == PM_ERR_RANGE);
+
+    make_spi_cfg(&cfg);
+    cfg.use_dma = true;
+    CHECK(pm_spi_init(&s_spi, &cfg) == PM_OK);
+    CHECK(mock_spi_is_open(1u) == 1);
+    CHECK(mock_spi_uses_dma(1u) == 1);
+    CHECK(pm_spi_clock_hz(&s_spi) == 1000000u);
+
+    CHECK(pm_spi_init(&s_spi, &cfg) == PM_ERR_BUSY);
+
+    CHECK(pm_spi_deinit(&s_spi) == PM_OK);
+    CHECK(mock_spi_is_open(1u) == 0);
+    CHECK(pm_spi_clock_hz(&s_spi) == 0u);
+    CHECK(pm_spi_deinit(&s_spi) == PM_OK);       /* idempotent */
+}
+
+static void test_spi_async(void)
+{
+    pm_spi_cfg_t cfg;
+    pm_spi_stats_t stats;
+    pm_evt_t evt;
+    size_t done = 99u;
+
+    mock_reset();
+    memset(&s_spi, 0, sizeof(s_spi));
+    host_time_reset();
+    make_spi_cfg(&cfg);
+
+    CHECK(pm_spi_init(&s_spi, &cfg) == PM_OK);
+
+    fill_spi_buffers(3u);
+    CHECK(pm_spi_transfer(&s_spi, s_spi_tx, s_spi_rx, 3u, &done,
+                          PM_SPI_TIMEOUT_NOW) == PM_ERR_AGAIN);
+    CHECK(done == 0u);
+    CHECK(mock_spi_capture_len(1u) == 3u);
+    CHECK(memcmp(mock_spi_capture(1u), s_spi_tx, 3u) == 0);
+
+    /* One transfer at a time. */
+    CHECK(pm_spi_transfer(&s_spi, s_spi_tx, s_spi_rx, 3u, &done,
+                          PM_SPI_TIMEOUT_NOW) == PM_ERR_BUSY);
+
+    /* Nothing is "received" until the ISR completes the transfer. */
+    CHECK(s_spi_rx[0] == 0u);
+
+    mock_spi_complete(1u);
+    CHECK(memcmp(s_spi_rx, s_spi_tx, 3u) == 0);
+
+    CHECK(pm_spi_poll(&s_spi, &evt, NULL, NULL) == true);
+    CHECK(evt.id == PM_EVT_SPI_DONE);
+    CHECK(evt.src == 1u);
+    CHECK(evt.arg == 3u);
+    CHECK(pm_spi_poll(&s_spi, &evt, NULL, NULL) == false);
+
+    CHECK(pm_spi_get_stats(&s_spi, &stats) == PM_OK);
+    CHECK(stats.transfers == 1u);
+    CHECK(stats.tx_bytes == 3u);
+    CHECK(stats.rx_bytes == 3u);
+    CHECK(stats.errors == 0u);
+
+    /* The instance is reusable after completion. */
+    CHECK(pm_spi_transfer(&s_spi, s_spi_tx, s_spi_rx, 2u, &done,
+                          PM_SPI_TIMEOUT_NOW) == PM_ERR_AGAIN);
+    mock_spi_complete(1u);
+    CHECK(pm_spi_poll(&s_spi, &evt, NULL, NULL) == true);
+
+    CHECK(pm_spi_transfer(&s_spi, s_spi_tx, s_spi_rx, 0u, &done,
+                          PM_SPI_TIMEOUT_NOW) == PM_OK);
+    CHECK(done == 0u);
+    CHECK(pm_spi_transfer(&s_spi, NULL, s_spi_rx, 1u, &done, 0u) == PM_ERR_NULL);
+    CHECK(pm_spi_transfer(&s_spi, s_spi_tx, NULL, 1u, &done, 0u) == PM_ERR_NULL);
+    CHECK(pm_spi_transfer(&s_spi, s_spi_tx, s_spi_rx, 70000u, &done, 0u) == PM_ERR_PARAM);
+
+    CHECK(pm_spi_deinit(&s_spi) == PM_OK);
+}
+
+static void test_spi_sync(void)
+{
+    pm_spi_cfg_t cfg;
+    size_t done = 0u;
+
+    mock_reset();
+    memset(&s_spi, 0, sizeof(s_spi));
+    host_time_reset();
+    make_spi_cfg(&cfg);
+
+    CHECK(pm_spi_init(&s_spi, &cfg) == PM_OK);
+
+    /* The mock completes inside start(), like a very fast interrupt. */
+    mock_spi_set_auto_complete(1u, 1);
+    fill_spi_buffers(4u);
+    CHECK(pm_spi_transfer(&s_spi, s_spi_tx, s_spi_rx, 4u, &done, 100u) == PM_OK);
+    CHECK(done == 4u);
+    CHECK(memcmp(s_spi_rx, s_spi_tx, 4u) == 0);
+
+    CHECK(pm_spi_deinit(&s_spi) == PM_OK);
+}
+
+static void test_spi_timeout(void)
+{
+    pm_spi_cfg_t cfg;
+    pm_spi_stats_t stats;
+    size_t done = 0u;
+
+    mock_reset();
+    memset(&s_spi, 0, sizeof(s_spi));
+    host_time_reset();
+    make_spi_cfg(&cfg);
+
+    CHECK(pm_spi_init(&s_spi, &cfg) == PM_OK);
+
+    /* The mock never finishes; the model must abort and report progress. */
+    mock_spi_set_progress(1u, 2u);
+    fill_spi_buffers(8u);
+    CHECK(pm_spi_transfer(&s_spi, s_spi_tx, s_spi_rx, 8u, &done, 5u) == PM_ERR_TIMEOUT);
+    CHECK(done == 2u);
+
+    CHECK(pm_spi_get_stats(&s_spi, &stats) == PM_OK);
+    CHECK(stats.aborted == 1u);
+    CHECK(stats.transfers == 0u);
+
+    /* The object must be usable again after a timeout. */
+    mock_spi_set_auto_complete(1u, 1);
+    CHECK(pm_spi_transfer(&s_spi, s_spi_tx, s_spi_rx, 2u, &done, 100u) == PM_OK);
+    CHECK(done == 2u);
+
+    CHECK(pm_spi_deinit(&s_spi) == PM_OK);
+}
+
+static void test_spi_error(void)
+{
+    pm_spi_cfg_t cfg;
+    pm_spi_stats_t stats;
+    pm_evt_t evt;
+    size_t done = 0u;
+
+    mock_reset();
+    memset(&s_spi, 0, sizeof(s_spi));
+    host_time_reset();
+    make_spi_cfg(&cfg);
+
+    CHECK(pm_spi_init(&s_spi, &cfg) == PM_OK);
+
+    mock_spi_set_fail(1u, 1);
+    mock_spi_set_progress(1u, 1u);
+    CHECK(pm_spi_transfer(&s_spi, s_spi_tx, s_spi_rx, 4u, &done, 100u) == PM_ERR_IO);
+    CHECK(done == 1u);
+
+    CHECK(pm_spi_poll(&s_spi, &evt, NULL, NULL) == true);
+    CHECK(evt.id == PM_EVT_SPI_ERROR);
+    CHECK(evt.arg == 0x0008u);
+
+    CHECK(pm_spi_get_stats(&s_spi, &stats) == PM_OK);
+    CHECK(stats.errors == 1u);
+    CHECK(stats.last_error == 0x0008u);
+
+    /* Recovery: the next transfer runs normally. */
+    mock_spi_set_fail(1u, 0);
+    mock_spi_set_auto_complete(1u, 1);
+    CHECK(pm_spi_transfer(&s_spi, s_spi_tx, s_spi_rx, 2u, &done, 100u) == PM_OK);
+    CHECK(done == 2u);
+
+    CHECK(pm_spi_deinit(&s_spi) == PM_OK);
+}
+
+#endif /* PM_ENABLE_SPI */
+
+#if defined(PM_ENABLE_I2C)
+/* ------------------------------------------------------------------ i2c */
+
+static pm_i2c_t s_i2c;
+static uint8_t  s_i2c_wr[16];
+static uint8_t  s_i2c_rd[16];
+
+#define I2C_TEST_ADDR 0x70u   /* AHT20 */
+
+static void make_i2c_cfg(pm_i2c_cfg_t *cfg)
+{
+    memset(cfg, 0, sizeof(*cfg));
+    cfg->hw_id    = 1u;
+    cfg->clock_hz = 100000u;
+}
+
+static void test_i2c_validation(void)
+{
+    pm_i2c_cfg_t cfg;
+
+    mock_reset();
+    memset(&s_i2c, 0, sizeof(s_i2c));
+    make_i2c_cfg(&cfg);
+
+    CHECK(pm_i2c_init(NULL, &cfg) == PM_ERR_NULL);
+    CHECK(pm_i2c_init(&s_i2c, NULL) == PM_ERR_NULL);
+
+    cfg.clock_hz = 9999u;
+    CHECK(pm_i2c_init(&s_i2c, &cfg) == PM_ERR_PARAM);
+    make_i2c_cfg(&cfg);
+    cfg.clock_hz = 400001u;
+    CHECK(pm_i2c_init(&s_i2c, &cfg) == PM_ERR_PARAM);
+
+    make_i2c_cfg(&cfg);
+    cfg.hw_id = 9u;
+    CHECK(pm_i2c_init(&s_i2c, &cfg) == PM_ERR_RANGE);
+
+    make_i2c_cfg(&cfg);
+    CHECK(pm_i2c_init(&s_i2c, &cfg) == PM_OK);
+    CHECK(mock_i2c_is_open(1u) == 1);
+    CHECK(pm_i2c_clock_hz(&s_i2c) == 100000u);
+
+    CHECK(pm_i2c_init(&s_i2c, &cfg) == PM_ERR_BUSY);
+
+    /* Transfers reject bad arguments before touching the port. */
+    CHECK(pm_i2c_write(NULL, I2C_TEST_ADDR, s_i2c_wr, 1u, NULL, 0u) == PM_ERR_NULL);
+    CHECK(pm_i2c_write(&s_i2c, I2C_TEST_ADDR, NULL, 1u, NULL, 0u) == PM_ERR_NULL);
+    CHECK(pm_i2c_write(&s_i2c, 0x80u, s_i2c_wr, 1u, NULL, 0u) == PM_ERR_PARAM);
+    CHECK(pm_i2c_write(&s_i2c, I2C_TEST_ADDR, s_i2c_wr, 70000u, NULL, 0u) == PM_ERR_PARAM);
+    CHECK(pm_i2c_read(&s_i2c, I2C_TEST_ADDR, NULL, 1u, NULL, 0u) == PM_ERR_NULL);
+    CHECK(pm_i2c_write_read(&s_i2c, I2C_TEST_ADDR, s_i2c_wr, 0u, s_i2c_rd, 1u,
+                            NULL, 0u) == PM_ERR_PARAM);
+
+    CHECK(pm_i2c_deinit(&s_i2c) == PM_OK);
+    CHECK(mock_i2c_is_open(1u) == 0);
+    CHECK(pm_i2c_clock_hz(&s_i2c) == 0u);
+    CHECK(pm_i2c_deinit(&s_i2c) == PM_OK);       /* idempotent */
+
+    /* Not initialized -> state error, not a crash. */
+    CHECK(pm_i2c_write(&s_i2c, I2C_TEST_ADDR, s_i2c_wr, 1u, NULL, 0u) == PM_ERR_STATE);
+}
+
+static void test_i2c_write_async(void)
+{
+    pm_i2c_cfg_t cfg;
+    pm_i2c_stats_t stats;
+    pm_evt_t evt;
+    size_t done = 99u;
+
+    mock_reset();
+    memset(&s_i2c, 0, sizeof(s_i2c));
+    host_time_reset();
+    make_i2c_cfg(&cfg);
+
+    CHECK(pm_i2c_init(&s_i2c, &cfg) == PM_OK);
+
+    memset(s_i2c_wr, 0, sizeof(s_i2c_wr));
+    s_i2c_wr[0] = 0xACu;
+    s_i2c_wr[1] = 0x33u;
+
+    CHECK(pm_i2c_write(&s_i2c, I2C_TEST_ADDR, s_i2c_wr, 2u, &done,
+                       PM_I2C_TIMEOUT_NOW) == PM_ERR_AGAIN);
+    CHECK(done == 0u);
+    CHECK(mock_i2c_last_addr(1u) == (int)I2C_TEST_ADDR);
+    CHECK(mock_i2c_capture_len(1u) == 2u);
+    CHECK(memcmp(mock_i2c_capture(1u), s_i2c_wr, 2u) == 0);
+
+    /* One transaction at a time. */
+    CHECK(pm_i2c_write(&s_i2c, I2C_TEST_ADDR, s_i2c_wr, 2u, &done,
+                       PM_I2C_TIMEOUT_NOW) == PM_ERR_BUSY);
+
+    mock_i2c_complete(1u);
+
+    CHECK(pm_i2c_poll(&s_i2c, &evt, NULL, NULL) == true);
+    CHECK(evt.id == PM_EVT_I2C_DONE);
+    CHECK(evt.src == 1u);
+    CHECK(evt.arg == 2u);
+    CHECK(pm_i2c_poll(&s_i2c, &evt, NULL, NULL) == false);
+
+    CHECK(pm_i2c_get_stats(&s_i2c, &stats) == PM_OK);
+    CHECK(stats.transfers == 1u);
+    CHECK(stats.tx_bytes == 2u);
+    CHECK(stats.rx_bytes == 0u);
+    CHECK(stats.errors == 0u);
+
+    CHECK(pm_i2c_deinit(&s_i2c) == PM_OK);
+}
+
+static void test_i2c_read_sync(void)
+{
+    pm_i2c_cfg_t cfg;
+    pm_i2c_stats_t stats;
+    size_t done = 0u;
+
+    mock_reset();
+    memset(&s_i2c, 0, sizeof(s_i2c));
+    host_time_reset();
+    make_i2c_cfg(&cfg);
+
+    CHECK(pm_i2c_init(&s_i2c, &cfg) == PM_OK);
+
+    memset(s_i2c_rd, 0, sizeof(s_i2c_rd));
+    mock_i2c_set_auto_complete(1u, 1);
+    CHECK(pm_i2c_read(&s_i2c, I2C_TEST_ADDR, s_i2c_rd, 3u, &done, 100u) == PM_OK);
+    CHECK(done == 3u);
+    CHECK(s_i2c_rd[0] == 0xC0u);
+    CHECK(s_i2c_rd[1] == 0xC1u);
+    CHECK(s_i2c_rd[2] == 0xC2u);
+
+    CHECK(pm_i2c_get_stats(&s_i2c, &stats) == PM_OK);
+    CHECK(stats.rx_bytes == 3u);
+
+    CHECK(pm_i2c_deinit(&s_i2c) == PM_OK);
+}
+
+static void test_i2c_write_read(void)
+{
+    pm_i2c_cfg_t cfg;
+    pm_i2c_stats_t stats;
+    pm_evt_t evt;
+    size_t done = 0u;
+
+    mock_reset();
+    memset(&s_i2c, 0, sizeof(s_i2c));
+    host_time_reset();
+    make_i2c_cfg(&cfg);
+
+    CHECK(pm_i2c_init(&s_i2c, &cfg) == PM_OK);
+
+    memset(s_i2c_rd, 0, sizeof(s_i2c_rd));
+    s_i2c_wr[0] = 0x71u;                       /* AHT20 status register */
+
+    CHECK(pm_i2c_write_read(&s_i2c, I2C_TEST_ADDR, s_i2c_wr, 1u, s_i2c_rd, 2u,
+                            &done, PM_I2C_TIMEOUT_NOW) == PM_ERR_AGAIN);
+    CHECK(mock_i2c_capture_len(1u) == 1u);
+    CHECK(mock_i2c_capture(1u)[0] == 0x71u);
+
+    mock_i2c_complete(1u);
+
+    CHECK(pm_i2c_poll(&s_i2c, &evt, NULL, NULL) == true);
+    CHECK(evt.id == PM_EVT_I2C_DONE);
+    CHECK(evt.arg == 3u);                      /* 1 written + 2 read */
+
+    CHECK(pm_i2c_get_stats(&s_i2c, &stats) == PM_OK);
+    CHECK(stats.tx_bytes == 1u);
+    CHECK(stats.rx_bytes == 2u);
+    CHECK(s_i2c_rd[0] == 0xC0u);
+    CHECK(s_i2c_rd[1] == 0xC1u);
+
+    CHECK(pm_i2c_deinit(&s_i2c) == PM_OK);
+}
+
+static void test_i2c_timeout(void)
+{
+    pm_i2c_cfg_t cfg;
+    pm_i2c_stats_t stats;
+    size_t done = 0u;
+
+    mock_reset();
+    memset(&s_i2c, 0, sizeof(s_i2c));
+    host_time_reset();
+    make_i2c_cfg(&cfg);
+
+    CHECK(pm_i2c_init(&s_i2c, &cfg) == PM_OK);
+
+    /* The mock never completes; the model aborts and reports progress. */
+    mock_i2c_set_progress(1u, 1u);
+    CHECK(pm_i2c_write(&s_i2c, I2C_TEST_ADDR, s_i2c_wr, 8u, &done, 5u) == PM_ERR_TIMEOUT);
+    CHECK(done == 1u);
+
+    CHECK(pm_i2c_get_stats(&s_i2c, &stats) == PM_OK);
+    CHECK(stats.aborted == 1u);
+    CHECK(stats.transfers == 0u);
+
+    /* Usable again after a timeout. */
+    mock_i2c_set_auto_complete(1u, 1);
+    CHECK(pm_i2c_write(&s_i2c, I2C_TEST_ADDR, s_i2c_wr, 2u, &done, 100u) == PM_OK);
+    CHECK(done == 2u);
+
+    CHECK(pm_i2c_deinit(&s_i2c) == PM_OK);
+}
+
+static void test_i2c_error(void)
+{
+    pm_i2c_cfg_t cfg;
+    pm_i2c_stats_t stats;
+    pm_evt_t evt;
+    size_t done = 0u;
+
+    mock_reset();
+    memset(&s_i2c, 0, sizeof(s_i2c));
+    host_time_reset();
+    make_i2c_cfg(&cfg);
+
+    CHECK(pm_i2c_init(&s_i2c, &cfg) == PM_OK);
+
+    mock_i2c_set_fail(1u, 1);
+    mock_i2c_set_progress(1u, 1u);
+    CHECK(pm_i2c_write(&s_i2c, I2C_TEST_ADDR, s_i2c_wr, 4u, &done, 100u) == PM_ERR_IO);
+    CHECK(done == 1u);
+
+    CHECK(pm_i2c_poll(&s_i2c, &evt, NULL, NULL) == true);
+    CHECK(evt.id == PM_EVT_I2C_ERROR);
+    CHECK(evt.arg == 0x0004u);
+
+    CHECK(pm_i2c_get_stats(&s_i2c, &stats) == PM_OK);
+    CHECK(stats.errors == 1u);
+    CHECK(stats.last_error == 0x0004u);
+
+    /* Recovery: a device that answers again works. */
+    mock_i2c_set_fail(1u, 0);
+    mock_i2c_set_auto_complete(1u, 1);
+    CHECK(pm_i2c_write(&s_i2c, I2C_TEST_ADDR, s_i2c_wr, 2u, &done, 100u) == PM_OK);
+    CHECK(done == 2u);
+
+    CHECK(pm_i2c_deinit(&s_i2c) == PM_OK);
+}
+
+#endif /* PM_ENABLE_I2C */
+
+#if defined(PM_ENABLE_ADC)
+/* ------------------------------------------------------------------ adc */
+
+static pm_adc_t s_adc;
+
+static void make_adc_cfg(pm_adc_cfg_t *cfg)
+{
+    memset(cfg, 0, sizeof(*cfg));
+    cfg->hw_id       = 0u;
+    cfg->channel     = 1u;
+    cfg->sample_time = PM_ADC_SAMPLE_55CYCLES_5;
+    cfg->vref_mv     = 3300u;
+}
+
+static void test_adc_validation(void)
+{
+    pm_adc_cfg_t cfg;
+    uint16_t raw = 0u;
+
+    mock_reset();
+    memset(&s_adc, 0, sizeof(s_adc));
+    make_adc_cfg(&cfg);
+
+    CHECK(pm_adc_init(NULL, &cfg) == PM_ERR_NULL);
+    CHECK(pm_adc_init(&s_adc, NULL) == PM_ERR_NULL);
+
+    make_adc_cfg(&cfg);
+    cfg.vref_mv = 999u;
+    CHECK(pm_adc_init(&s_adc, &cfg) == PM_ERR_PARAM);
+    cfg.vref_mv = 5001u;
+    CHECK(pm_adc_init(&s_adc, &cfg) == PM_ERR_PARAM);
+    make_adc_cfg(&cfg);
+    cfg.sample_time = (pm_adc_sample_t)99;
+    CHECK(pm_adc_init(&s_adc, &cfg) == PM_ERR_PARAM);
+
+    make_adc_cfg(&cfg);
+    cfg.hw_id = 5u;
+    CHECK(pm_adc_init(&s_adc, &cfg) == PM_ERR_RANGE);
+    make_adc_cfg(&cfg);
+    cfg.channel = 9u;
+    CHECK(pm_adc_init(&s_adc, &cfg) == PM_ERR_RANGE);
+
+    make_adc_cfg(&cfg);
+    CHECK(pm_adc_init(&s_adc, &cfg) == PM_OK);
+    CHECK(mock_adc_is_open(0u) == 1);
+    CHECK(mock_adc_last_channel(0u) == 1);
+
+    CHECK(pm_adc_init(&s_adc, &cfg) == PM_ERR_BUSY);
+
+    CHECK(pm_adc_read(NULL, &raw, 0u) == PM_ERR_NULL);
+    CHECK(pm_adc_read(&s_adc, NULL, 0u) == PM_ERR_NULL);
+
+    CHECK(pm_adc_deinit(&s_adc) == PM_OK);
+    CHECK(mock_adc_is_open(0u) == 0);
+    CHECK(pm_adc_deinit(&s_adc) == PM_OK);       /* idempotent */
+
+    CHECK(pm_adc_read(&s_adc, &raw, 0u) == PM_ERR_STATE);
+
+    /* mV conversion is a pure function of the configured reference. */
+    CHECK(pm_adc_to_mv(NULL, 4095u) == 3300u);
+}
+
+static void test_adc_async(void)
+{
+    pm_adc_cfg_t cfg;
+    pm_adc_stats_t stats;
+    pm_evt_t evt;
+    uint16_t raw = 0u;
+    uint16_t mv = 0u;
+
+    mock_reset();
+    memset(&s_adc, 0, sizeof(s_adc));
+    make_adc_cfg(&cfg);
+
+    CHECK(pm_adc_init(&s_adc, &cfg) == PM_OK);
+    CHECK(pm_adc_to_mv(&s_adc, 2048u) == 1650u);
+    CHECK(pm_adc_to_mv(&s_adc, 0u) == 0u);
+
+    mock_adc_set_value(2048u);
+    CHECK(pm_adc_read(&s_adc, &raw, PM_ADC_TIMEOUT_NOW) == PM_ERR_AGAIN);
+    CHECK(pm_adc_read(&s_adc, &raw, PM_ADC_TIMEOUT_NOW) == PM_ERR_BUSY);
+
+    mock_adc_complete();
+
+    CHECK(pm_adc_poll(&s_adc, &evt, NULL, NULL) == true);
+    CHECK(evt.id == PM_EVT_ADC_DONE);
+    CHECK(evt.arg == 2048u);
+    CHECK(pm_adc_poll(&s_adc, &evt, NULL, NULL) == false);
+
+    CHECK(pm_adc_get_stats(&s_adc, &stats) == PM_OK);
+    CHECK(stats.conversions == 1u);
+    CHECK(stats.last_value == 2048u);
+
+    /* Synchronous read through the automatic completion path. */
+    mock_adc_set_auto_complete(1);
+    mock_adc_set_value(4095u);
+    CHECK(pm_adc_read(&s_adc, &raw, 100u) == PM_OK);
+    CHECK(raw == 4095u);
+    CHECK(pm_adc_read_mv(&s_adc, &mv, 100u) == PM_OK);
+    CHECK(mv == 3300u);
+
+    CHECK(pm_adc_get_stats(&s_adc, &stats) == PM_OK);
+    CHECK(stats.conversions == 3u);
+
+    CHECK(pm_adc_deinit(&s_adc) == PM_OK);
+    CHECK(mock_adc_is_open(0u) == 0);
+}
+
+static void test_adc_timeout(void)
+{
+    pm_adc_cfg_t cfg;
+    pm_adc_stats_t stats;
+    uint16_t raw = 0u;
+
+    mock_reset();
+    memset(&s_adc, 0, sizeof(s_adc));
+    make_adc_cfg(&cfg);
+
+    CHECK(pm_adc_init(&s_adc, &cfg) == PM_OK);
+
+    CHECK(pm_adc_read(&s_adc, &raw, 5u) == PM_ERR_TIMEOUT);
+
+    CHECK(pm_adc_get_stats(&s_adc, &stats) == PM_OK);
+    CHECK(stats.aborted == 1u);
+    CHECK(stats.conversions == 0u);
+
+    /* Usable again after the timeout. */
+    mock_adc_set_auto_complete(1);
+    mock_adc_set_value(1234u);
+    CHECK(pm_adc_read(&s_adc, &raw, 100u) == PM_OK);
+    CHECK(raw == 1234u);
+
+    CHECK(pm_adc_deinit(&s_adc) == PM_OK);
+}
+
+static void test_adc_error(void)
+{
+    pm_adc_cfg_t cfg;
+    pm_adc_stats_t stats;
+    pm_evt_t evt;
+    uint16_t raw = 0u;
+
+    mock_reset();
+    memset(&s_adc, 0, sizeof(s_adc));
+    make_adc_cfg(&cfg);
+
+    CHECK(pm_adc_init(&s_adc, &cfg) == PM_OK);
+
+    mock_adc_set_fail(1);
+    CHECK(pm_adc_read(&s_adc, &raw, 100u) == PM_ERR_IO);
+
+    CHECK(pm_adc_poll(&s_adc, &evt, NULL, NULL) == true);
+    CHECK(evt.id == PM_EVT_ADC_ERROR);
+    CHECK(evt.arg == 0x0040u);
+
+    CHECK(pm_adc_get_stats(&s_adc, &stats) == PM_OK);
+    CHECK(stats.errors == 1u);
+    CHECK(stats.last_error == 0x0040u);
+
+    /* Recovery: the next conversion completes normally. */
+    mock_adc_set_fail(0);
+    mock_adc_set_auto_complete(1);
+    mock_adc_set_value(77u);
+    CHECK(pm_adc_read(&s_adc, &raw, 100u) == PM_OK);
+    CHECK(raw == 77u);
+
+    CHECK(pm_adc_deinit(&s_adc) == PM_OK);
+}
+
+#endif /* PM_ENABLE_ADC */
+
+#if defined(PM_ENABLE_PWM)
+/* ------------------------------------------------------------------ pwm */
+
+static pm_pwm_t s_pwm;
+
+static void make_pwm_cfg(pm_pwm_cfg_t *cfg)
+{
+    memset(cfg, 0, sizeof(*cfg));
+    cfg->hw_id         = 3u;      /* buzzer */
+    cfg->freq_hz       = 2000u;
+    cfg->duty_permille = 200u;    /* 20 % */
+}
+
+static void test_pwm_validation(void)
+{
+    pm_pwm_cfg_t cfg;
+
+    mock_reset();
+    memset(&s_pwm, 0, sizeof(s_pwm));
+    make_pwm_cfg(&cfg);
+
+    CHECK(pm_pwm_init(NULL, &cfg) == PM_ERR_NULL);
+    CHECK(pm_pwm_init(&s_pwm, NULL) == PM_ERR_NULL);
+
+    make_pwm_cfg(&cfg);
+    cfg.freq_hz = 0u;
+    CHECK(pm_pwm_init(&s_pwm, &cfg) == PM_ERR_PARAM);
+    make_pwm_cfg(&cfg);
+    cfg.freq_hz = PM_PWM_FREQ_MAX + 1u;
+    CHECK(pm_pwm_init(&s_pwm, &cfg) == PM_ERR_PARAM);
+    make_pwm_cfg(&cfg);
+    cfg.duty_permille = 1001u;
+    CHECK(pm_pwm_init(&s_pwm, &cfg) == PM_ERR_PARAM);
+    make_pwm_cfg(&cfg);
+    cfg.hw_id = MOCK_PWM_COUNT;
+    CHECK(pm_pwm_init(&s_pwm, &cfg) == PM_ERR_RANGE);
+
+    make_pwm_cfg(&cfg);
+    CHECK(pm_pwm_init(&s_pwm, &cfg) == PM_OK);
+    CHECK(mock_pwm_is_open(3u) == 1);
+    CHECK(mock_pwm_frequency(3u) == 2000u);
+    CHECK(mock_pwm_duty(3u) == 200u);
+    CHECK(mock_pwm_is_enabled(3u) == 1);
+    CHECK(pm_pwm_frequency_hz(&s_pwm) == 2000u);
+    CHECK(pm_pwm_duty_permille(&s_pwm) == 200u);
+
+    CHECK(pm_pwm_init(&s_pwm, &cfg) == PM_ERR_BUSY);
+
+    CHECK(pm_pwm_deinit(&s_pwm) == PM_OK);
+    CHECK(mock_pwm_is_open(3u) == 0);
+    CHECK(pm_pwm_frequency_hz(&s_pwm) == 0u);
+    CHECK(pm_pwm_duty_permille(&s_pwm) == 0u);
+    CHECK(pm_pwm_deinit(&s_pwm) == PM_OK);       /* idempotent */
+
+    CHECK(pm_pwm_set_duty(&s_pwm, 100u) == PM_ERR_STATE);
+    CHECK(pm_pwm_set_frequency(&s_pwm, 1000u, NULL) == PM_ERR_STATE);
+    CHECK(pm_pwm_set_pulse_us(&s_pwm, 1500u) == PM_ERR_STATE);
+    CHECK(pm_pwm_enable(&s_pwm, true) == PM_ERR_STATE);
+}
+
+static void test_pwm_ops(void)
+{
+    pm_pwm_cfg_t cfg;
+    uint32_t actual = 0u;
+
+    mock_reset();
+    memset(&s_pwm, 0, sizeof(s_pwm));
+    make_pwm_cfg(&cfg);
+    cfg.hw_id   = 2u;             /* servo */
+    cfg.freq_hz = 50u;
+    cfg.duty_permille = 75u;      /* 1.5 ms */
+
+    CHECK(pm_pwm_init(&s_pwm, &cfg) == PM_OK);
+    CHECK(pm_pwm_frequency_hz(&s_pwm) == 50u);
+    CHECK(pm_pwm_duty_permille(&s_pwm) == 75u);
+
+    CHECK(pm_pwm_set_duty(&s_pwm, 250u) == PM_OK);
+    CHECK(mock_pwm_duty(2u) == 250u);
+    CHECK(pm_pwm_duty_permille(&s_pwm) == 250u);
+    CHECK(pm_pwm_set_duty(&s_pwm, 1001u) == PM_ERR_PARAM);
+
+    CHECK(pm_pwm_set_frequency(&s_pwm, 100u, &actual) == PM_OK);
+    CHECK(actual == 100u);
+    CHECK(pm_pwm_frequency_hz(&s_pwm) == 100u);
+    CHECK(mock_pwm_frequency(2u) == 100u);
+    CHECK(pm_pwm_set_frequency(&s_pwm, 0u, &actual) == PM_ERR_PARAM);
+
+    /* 1500 us at 100 Hz = 15 % = 150 permille. */
+    CHECK(pm_pwm_set_pulse_us(&s_pwm, 1500u) == PM_OK);
+    CHECK(pm_pwm_duty_permille(&s_pwm) == 150u);
+
+    /* Longer than the period clamps to 1000. */
+    CHECK(pm_pwm_set_pulse_us(&s_pwm, 20000u) == PM_OK);
+    CHECK(pm_pwm_duty_permille(&s_pwm) == 1000u);
+
+    CHECK(pm_pwm_enable(&s_pwm, false) == PM_OK);
+    CHECK(mock_pwm_is_enabled(2u) == 0);
+    CHECK(pm_pwm_enable(&s_pwm, true) == PM_OK);
+    CHECK(mock_pwm_is_enabled(2u) == 1);
+
+    CHECK(pm_pwm_deinit(&s_pwm) == PM_OK);
+}
+
+#endif /* PM_ENABLE_PWM */
+
+int main(void)
+{
+    test_ringbuf();
+    test_evtq();
+    test_gpio();
+    test_uart_validation();
+    test_uart_tx();
+    test_uart_rx();
+    test_uart_timeout();
+#if defined(PM_ENABLE_SPI)
+    test_spi_validation();
+    test_spi_async();
+    test_spi_sync();
+    test_spi_timeout();
+    test_spi_error();
+#endif
+#if defined(PM_ENABLE_I2C)
+    test_i2c_validation();
+    test_i2c_write_async();
+    test_i2c_read_sync();
+    test_i2c_write_read();
+    test_i2c_timeout();
+    test_i2c_error();
+#endif
+#if defined(PM_ENABLE_ADC)
+    test_adc_validation();
+    test_adc_async();
+    test_adc_timeout();
+    test_adc_error();
+#endif
+#if defined(PM_ENABLE_PWM)
+    test_pwm_validation();
+    test_pwm_ops();
+#endif
+
+    printf("\n%d checks, %d failure(s)\n", s_checks, s_failures);
+    return (s_failures == 0) ? 0 : 1;
+}
