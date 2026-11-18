@@ -1,30 +1,18 @@
 #!/usr/bin/env python3
 # source-repo: https://github.com/BiscuiTs2026/firmware-four-layer-architecture
-# checker-version: 3.2.0
 # source-commit: 2bef49f9e95c2debcdf2cd221ec40e16a4ce09fd
+# 上游文件自述版本：v3（该提交里没有版本常量；升级时以上游提交哈希为准）
 # 本文件是拷贝，不在本仓改判定规则；升级方式见 README「四层架构检查与 CI」与 tools/CHECKER.lock。
-"""check_layering.py — 四层架构启发式静态检查（v3.2）。
+"""check_layering.py — 四层架构启发式静态检查（v3）。
 
 用法：
     python3 check_layering.py <工程根目录> [选项]
-    python3 check_layering.py --version [--lock tools/CHECKER.lock]
 
 选项：
     --roles PATH        角色清单文件，默认在工程根目录找 .arch-roles / arch-roles.txt
     --glue-max-lines N  入口胶水文件行数上限，默认 200
     --max-per-file N    未分层文件每文件最多提示条数，默认 5
     --no-linker         跳过链接脚本固定地址段检查
-    --version           打印版本与来源，供单文件拷出使用时核对
-    --lock PATH         与使用方的锁文件比对版本/来源提交，不一致退出 1
-
-角色清单除 "模式 = 层" 外支持三种指令（写在清单顶部）：
-    alias <层名> = <内建层>   把工程自己的层名映射到内建层，如 alias hal = bsp
-    layers = <层名>, ...      声明工程实际使用的层；未声明的层不参与判定，
-                              且没有 components 层时 APP 直调 BSP 放行（两层工程）
-    ignore = <相对路径/模式>  跳过厂商 SDK、生成目录、单测桩（可多行）
-
-本文件可单独拷到其它工程（tools/check_layering.py）使用：只依赖 Python 3.8+ 标准库，
-不读本仓库任何其它文件，不需要安装，也不需要整仓检出。
 
 两类工程形态都能扫：
     目录模式：路径里含 bsp/ osal/ components/ app/ 即按目录判层，无需任何配置。
@@ -77,10 +65,6 @@ import os
 import re
 import sys
 
-CHECKER_VERSION = "3.2.0"
-SOURCE_REPO = "https://github.com/BiscuiTs2026/firmware-four-layer-architecture"
-SOURCE_COMMIT = "2bef49f9e95c2debcdf2cd221ec40e16a4ce09fd"  # 与 tools/CHECKER.lock 保持一致
-
 ROLES = ("bsp", "osal", "components", "app", "glue", "common")
 LAYER_DEPTH = {"common": -1, "bsp": 0, "osal": 1, "components": 2, "app": 3}
 LAYERS = set(LAYER_DEPTH)
@@ -95,10 +79,6 @@ GLUE_NAME = re.compile(r"(^main\.c$|^startup_.*|^system_.*|.*_it\.c$|.*_irq\.c$|
 CMSIS_WHITELIST = {"SystemCoreClock", "uwTick", "uwTickPrio", "uwTickFreq"}
 
 ROLE_FILE_NAMES = (".arch-roles", "arch-roles.txt")
-DIRECTIVE = re.compile(r"^(alias|layers|ignore)\s+(.+?)\s*=\s*(.+)$", re.I)
-
-# 由 load_roles 注入的忽略路径（厂商 SDK、生成目录、单测桩）
-_IGNORE_GLOBS = []
 
 PLATFORM_HEADER = re.compile(
     r'#\s*include\s*[<"]('
@@ -265,26 +245,8 @@ def mask_comments(text: str) -> str:
 # ---------------------------------------------------------------- 角色解析
 
 
-class RoleConfig:
-    """角色清单：文件→层映射，外加 alias / layers / ignore 三条指令。"""
-
-    def __init__(self):
-        self.rules = []          # [(pattern, 内建层)]
-        self.aliases = {}        # 工程自己的层名 → 内建层
-        self.layers = None       # 工程实际使用的内建层集合；None = 不限定
-        self.ignores = []        # 忽略的相对路径或模式
-
-    def resolve_name(self, role):
-        return self.aliases.get(role, role)
-
-    def has_layer(self, role):
-        if self.layers is None:
-            return True
-        return role in ("glue", "common") or role in self.layers
-
-
 def load_roles(root: str, roles_path: str | None):
-    """返回 RoleConfig，没有清单则返回 None。"""
+    """返回 [(pattern, role)]，没有清单则返回 None。"""
     path = roles_path
     if path is None:
         for name in ROLE_FILE_NAMES:
@@ -296,89 +258,33 @@ def load_roles(root: str, roles_path: str | None):
         return None
     if not os.path.isfile(path):
         raise SystemExit(f"角色清单不存在：{path}")
-    cfg = RoleConfig()
+    rules = []
     with open(path, encoding="utf-8", errors="ignore") as fh:
         for no, line in enumerate(fh, 1):
             raw = line.split("#", 1)[0].strip()
-            if not raw:
-                continue
-            directive = DIRECTIVE.match(raw)
-            if directive:
-                key = directive.group(1).lower()
-                arg = directive.group(2).strip()
-                value = directive.group(3).strip()
-                if key == "alias":
-                    if value not in ROLES:
-                        raise SystemExit(
-                            f"{path}:{no} 别名目标 {value!r} 不是内建角色，可用：{', '.join(ROLES)}")
-                    if not re.fullmatch(r"[A-Za-z_]\w*", arg):
-                        raise SystemExit(f"{path}:{no} 别名 {arg!r} 不是合法标识符")
-                    cfg.aliases[arg] = value
-                    continue
-                if key == "layers":
-                    resolved = set()
-                    for name in (n.strip() for n in value.split(",")):
-                        if not name:
-                            continue
-                        target = cfg.aliases.get(name, name)
-                        if target not in LAYERS:
-                            raise SystemExit(
-                                f"{path}:{no} layers 里的 {name!r} 未知；先写 alias，或直接写内建层")
-                        resolved.add(target)
-                    cfg.layers = resolved
-                    continue
-                for item in re.split(r"[,;]", value):
-                    item = item.strip().strip('"').replace("\\", "/")
-                    if item:
-                        cfg.ignores.append(item)
-                continue
-            if "=" not in raw:
+            if not raw or "=" not in raw:
                 continue
             pattern, role = raw.rsplit("=", 1)
             pattern, role = pattern.strip(), role.strip()
-            role = cfg.resolve_name(role)
             if role not in ROLES:
                 raise SystemExit(f"{path}:{no} 未知角色 {role!r}，可用：{', '.join(ROLES)}")
-            cfg.rules.append((pattern.replace("\\", "/"), role))
-    return cfg
+            rules.append((pattern.replace("\\", "/"), role))
+    return rules
 
 
-def set_ignores(patterns):
-    _IGNORE_GLOBS[:] = patterns
-
-
-def is_ignored(rel: str) -> bool:
-    """rel 为相对工程根的路径。支持目录前缀与 shell 风格通配。"""
-    if not _IGNORE_GLOBS:
-        return False
-    rel = rel.replace("\\", "/")
-    parts = [p for p in rel.split("/") if p not in ("", ".")]
-    for pattern in _IGNORE_GLOBS:
-        pat = pattern.rstrip("/")
-        if not pat:
-            continue
-        if fnmatch.fnmatch(rel, pat) or rel == pat or rel.startswith(pat + "/"):
-            return True
-        if "/" not in pat and any(fnmatch.fnmatch(part, pat) for part in parts):
-            return True
-    return False
-
-
-def match_role(rel: str, cfg) -> str:
+def match_role(rel: str, rules) -> str:
     base = rel.rsplit("/", 1)[-1]
-    for pattern, role in cfg.rules:
+    for pattern, role in rules:
         target = base if "/" not in pattern else rel
         if fnmatch.fnmatch(target, pattern):
             return role
     return ""
 
 
-def dir_role(rel: str, cfg) -> str:
-    aliases = cfg.aliases if cfg else {}
+def dir_role(rel: str) -> str:
     for part in rel.split("/")[:-1]:
-        name = aliases.get(part, part)
-        if name in LAYERS:
-            return name
+        if part in LAYERS:
+            return part
     return ""
 
 
@@ -386,39 +292,21 @@ def is_glue(rel: str) -> bool:
     return bool(GLUE_NAME.match(rel.rsplit("/", 1)[-1]))
 
 
-def resolve_layer(rel: str, cfg) -> str:
-    layer = match_role(rel, cfg) if cfg and cfg.rules else ""
+def resolve_layer(rel: str, rules) -> str:
+    layer = match_role(rel, rules) if rules else ""
     if not layer:
-        layer = dir_role(rel, cfg)
+        layer = dir_role(rel)
     if not layer and is_glue(rel):
         layer = "glue"
     return layer
 
 
-def iter_files(root: str, suffixes):
-    """遍历工程内指定后缀的文件，跳过内置生成目录与角色清单 ignore 的路径。"""
-    for dirpath, dirnames, filenames in os.walk(root):
-        rel_dir = os.path.relpath(dirpath, root).replace("\\", "/")
-        keep = []
-        for name in dirnames:
-            if name in SKIP_DIRS:
-                continue
-            sub = name if rel_dir == "." else f"{rel_dir}/{name}"
-            if is_ignored(sub + "/"):
-                continue
-            keep.append(name)
-        dirnames[:] = keep
-        for fn in filenames:
-            if not fn.endswith(suffixes):
-                continue
-            rel = fn if rel_dir == "." else f"{rel_dir}/{fn}"
-            if is_ignored(rel):
-                continue
-            yield os.path.join(dirpath, fn)
-
-
 def iter_c_files(root: str):
-    return iter_files(root, (".c", ".h"))
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        for fn in filenames:
+            if fn.endswith((".c", ".h")):
+                yield os.path.join(dirpath, fn)
 
 
 def read_source(path: str):
@@ -589,12 +477,12 @@ def layer_depth(layer: str) -> int:
     return 4 if layer == "glue" else LAYER_DEPTH.get(layer, -1)
 
 
-def build_function_index(root: str, cfg):
+def build_function_index(root: str, rules):
     """函数名 → 定义它的层集合。用于发现"下层声明/调用上层函数"的反向依赖。"""
     index = {}
     for path in iter_c_files(root):
         rel = os.path.relpath(path, root).replace("\\", "/")
-        layer = resolve_layer(rel, cfg)
+        layer = resolve_layer(rel, rules)
         if layer not in LAYER_DEPTH and layer != "glue":
             continue
         _, masked, _ = read_source(path)
@@ -635,12 +523,12 @@ def macro_reaches_hardware(expansion: str) -> bool:
     )
 
 
-def build_macro_index(root: str, cfg):
+def build_macro_index(root: str, rules):
     """宏名 → (定义层, 文件)。展开后碰硬件/BSP 的宏，被上层使用即视为越层。"""
     index = {}
     for path in iter_c_files(root):
         rel = os.path.relpath(path, root).replace("\\", "/")
-        layer = resolve_layer(rel, cfg)
+        layer = resolve_layer(rel, rules)
         if not layer:
             continue
         _, masked, _ = read_source(path)
@@ -685,18 +573,23 @@ def _declared_size(body: str):
 def collect_linker(root: str):
     """返回 [(rel, name, addr_text, addr_int, line, noload, size, wildcards)]。"""
     sections = []
-    for path in iter_files(root, (".ld",)):
-        rel = os.path.relpath(path, root).replace("\\", "/")
-        with open(path, encoding="utf-8", errors="ignore") as fh:
-            text = fh.read()
-        for m in LD_SECTION.finditer(text):
-            body = _section_body(text, m.end() - 1)
-            wildcards = [w for w in LD_WILDCARD.findall(body) if "*" in w or "?" in w]
-            line = text.count("\n", 0, m.start()) + 1
-            sections.append((
-                rel, m.group(1), m.group(2), int(m.group(2), 16), line,
-                bool(m.group(3)), _declared_size(body), wildcards,
-            ))
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        for fn in filenames:
+            if not fn.endswith(".ld"):
+                continue
+            path = os.path.join(dirpath, fn)
+            rel = os.path.relpath(path, root).replace("\\", "/")
+            with open(path, encoding="utf-8", errors="ignore") as fh:
+                text = fh.read()
+            for m in LD_SECTION.finditer(text):
+                body = _section_body(text, m.end() - 1)
+                wildcards = [w for w in LD_WILDCARD.findall(body) if "*" in w or "?" in w]
+                line = text.count("\n", 0, m.start()) + 1
+                sections.append((
+                    rel, m.group(1), m.group(2), int(m.group(2), 16), line,
+                    bool(m.group(3)), _declared_size(body), wildcards,
+                ))
     return sections
 
 
@@ -1001,14 +894,14 @@ def main():
     return 1 if errors else 0
 
 
-def build_header_index(root: str, cfg):
+def build_header_index(root: str, rules):
     """头文件名 → (所在层, 相对路径)。"""
     index = {}
     for path in iter_c_files(root):
         if not path.endswith(".h"):
             continue
         rel = os.path.relpath(path, root).replace("\\", "/")
-        layer = resolve_layer(rel, cfg)
+        layer = resolve_layer(rel, rules)
         if not layer:
             continue
         index.setdefault(os.path.basename(path), (layer, rel))

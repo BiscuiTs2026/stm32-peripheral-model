@@ -362,7 +362,7 @@ APP → components → OSAL → BSP(本仓库的 pm_* 契约) → 芯片后端 �
 
 `tools/check_layering.py` 不是本仓写的，是
 [firmware-four-layer-architecture](https://github.com/BiscuiTs2026/firmware-four-layer-architecture)
-检查器的拷贝（v3.2.0，来源提交 `2bef49f`）。来源与同步信息记在 `tools/CHECKER.lock`
+检查器的拷贝（上游提交 `2bef49f`，文件自述 v3，无版本常量）。来源与同步信息记在 `tools/CHECKER.lock`
 和脚本头部；本仓只使用，**不修改判定规则**。
 
 本地运行（与 CI 门禁等价）：
@@ -388,10 +388,11 @@ python3 tools/check_layering.py . --roles .arch-roles
 
 ### 升级检查器
 
-1. 在上游仓库取新提交，看 `skill/scripts/check_layering.py` 的 `checker-version`；
+1. 在上游仓库取新提交（**用干净工作树或 `git show <commit>:skill/scripts/check_layering.py`，
+   不要拷别人正在编辑的工作副本**）；
 2. 整文件覆盖 `tools/check_layering.py`；
-3. 改文件头 `source-commit` 与脚本内 `SOURCE_COMMIT`，同步 `tools/CHECKER.lock`
-   （`source-blob` 用 `git -C <上游仓> rev-parse HEAD:skill/scripts/check_layering.py`）；
+3. 改文件头的 `source-commit`，同步 `tools/CHECKER.lock`
+   （`source-blob` 用 `git -C <上游仓> rev-parse <commit>:skill/scripts/check_layering.py`）；
 4. 本地跑一遍：ERROR 必须为 0；WARN 有变化就核对是否仍只覆盖上面两类形态；
 5. 提交信息写明旧版本 → 新版本与上游提交哈希。
 
