@@ -71,6 +71,9 @@ common        任何层都可依赖的纯逻辑（不在上图的主干上，横
 | board | port 内部头、芯片头、common | APP、pm_core |
 | common | 仅 C 标准库与同层头 | 其余所有层、厂商头、寄存器、HAL |
 
+`board` 行在 `.arch-roles` 中判为 `bsp`：板级引脚/外设资源表（`platform/*/board_*`）属于
+端口层数据，`glue` 只消费、不定义。启动文件、链接脚本、HAL 配置与演示入口仍为 `glue`。
+
 ---
 
 ## 3. 错误码模型

@@ -35,6 +35,9 @@ src/osal/*          = osal
 # 芯片后端：HAL 胶水、ISR、pm_port_get() 的 F1 实现
 src/port/stm32f1/*  = bsp
 
-# 板级引脚表、启动文件、链接脚本、HAL 配置、演示入口
+# 板级引脚/外设资源表属于端口层数据；glue 只消费，不定义（规范：资源表归 bsp）
+platform/stm32f103/board_* = bsp
+
+# 启动文件、链接脚本、HAL 配置、演示入口
 platform/*          = glue
 src/app/main.c      = glue
