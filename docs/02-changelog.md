@@ -3,6 +3,16 @@
 只记录跨版本的结构性变动，以及"事后容易被误判为丢文件"的操作。接口细节以
 [docs/00-contract.md](00-contract.md) 为准。
 
+## 检查器升级 3.2.0 → 3.3.1（2026-11-19）
+
+- 覆盖 `tools/check_layering.py`（上游 `3c507b7`，blob `9740b0a`），只改文件头
+  `source-commit` 与 `SOURCE_COMMIT` 两处，其余与上游逐字一致；
+- `tools/CHECKER.lock` 同步三处（版本、提交、blob），
+  `python tools/check_layering.py --version --lock tools/CHECKER.lock` → `[LOCK] 一致`，退出码 0；
+- **基线对比**：同参扫描新旧的输出逐行相同，均为 0 ERROR / 18 WARN，**无新增命中**，
+  因此本期不建存量清单；
+- 首轮全部保持 WARN 级，未把任何规则调成 ERROR；调级需单独立项。
+
 ## v0.5（2026-11-19，提交 `76e4863`、`9b393e6`）
 
 ### 新增

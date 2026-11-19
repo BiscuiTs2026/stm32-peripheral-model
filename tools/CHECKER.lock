@@ -1,11 +1,11 @@
 # 上游检查器锁文件：改这里等于声明"我升到了某个版本"
-checker-version = 3.2.0
+checker-version = 3.3.1
 source-repo     = https://github.com/BiscuiTs2026/firmware-four-layer-architecture
-source-commit   = af884914c4cdc23472a20382a32df4a9e8305ce5
-source-blob     = 0c16afe694f2b3b1b5cbd211d1d055db9cb1af9d
-synced-at       = 2026-11-18
+source-commit   = 3c507b74bbad00b86d56f9bbd6dd7b1e475ec189
+source-blob     = 9740b0aa1a719ea0daaf137c7201501ca3cb1a31
+synced-at       = 2026-11-19
 local-patches   = none
-# source-blob 是上游 af88491:skill/scripts/check_layering.py 的 git blob；
+# source-blob 是上游 3c507b7:skill/scripts/check_layering.py 的 git blob；
 # 本地文件除 # source-commit 行与 SOURCE_COMMIT 常量外与上游逐字一致。
 # 升级步骤：覆盖 tools/check_layering.py → 改文件头 source-commit 与 SOURCE_COMMIT → 改本文件三处 → 本地跑
 #   python3 tools/check_layering.py --version --lock tools/CHECKER.lock
