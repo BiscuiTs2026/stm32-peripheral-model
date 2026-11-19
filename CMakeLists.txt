@@ -15,7 +15,7 @@ set(PM_PLATFORM ${PM_ROOT}/platform/stm32f103)
 # exist. This keeps the historical batches (v0.1 GPIO+UART, v0.2 +SPI,
 # v0.3 +I2C, v0.4 +ADC/PWM) independently buildable without keeping hand-made
 # copies of older CMakeLists: the files themselves are the switch.
-set(PM_MODULE_NAMES  spi i2c adc pwm)
+set(PM_MODULE_NAMES  spi i2c adc pwm tone track encoder)
 set(PM_MODULE_SOURCES "")
 set(PM_MODULE_DEFS "")
 foreach(mod ${PM_MODULE_NAMES})
@@ -80,6 +80,8 @@ add_library(pm_core STATIC
     src/core/pm_ringbuf.c
     src/core/pm_gpio.c
     src/core/pm_uart.c
+    src/common/pm_pwm_math.c
+    src/common/pm_timer.c
     ${PM_MODULE_SOURCES}
 )
 target_include_directories(pm_core PUBLIC ${PM_ROOT}/include/pm ${PM_ROOT}/include)

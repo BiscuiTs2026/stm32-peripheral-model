@@ -4,12 +4,15 @@
 
 一套按"接口契约优先"方式组织的 STM32F1 外设代码：上层只依赖 `include/pm/` 里的公共 API，芯片相关的一切都收敛在 port 层。目标是换板子只改一张引脚表，换芯片只换一个 port 目录，核心逻辑永远能在主机上跑单测。
 
-当前版本 **v0.4**，配套 STM32F103C8T6 最小系统板（72 MHz、20 KB RAM、64 KB Flash）。
-已实现 GPIO、UART、SPI（主机全双工，中断 + 可选 DMA）、I2C（主机，中断状态机，支持写读合并；repeated START 仅适用于寄存器型器件）、ADC（单通道单次转换，EOC 中断）与 PWM（定时器比较输出）。
+当前版本 **v0.5**，配套 STM32F103C8T6 最小系统板（72 MHz、20 KB RAM、64 KB Flash）。
+已实现 GPIO、UART、SPI（主机全双工，中断 + 可选 DMA）、I2C（主机，中断状态机，支持写读合并；repeated START 仅适用于寄存器型器件）、ADC（单通道单次转换，EOC 中断）、PWM（定时器比较输出）、软件音调（TIM3 中断翻转）、循迹（单路数字量）与正交编码器（AB x4）。
 
 ## 能做什么
 
-- 驱动 GPIO、UART、SPI（主机全双工）、I2C（主机）、ADC（单通道单次）、PWM（定时器比较输出）；
+- 驱动 GPIO、UART、SPI（主机全双工）、I2C（主机）、ADC（单通道单次）、PWM（定时器比较输出）、
+  软件音调、循迹、正交编码器；
+- 定时器是共享资源：模块在 init 时声明 TIM/PSC/ARR/通道，冲突返回 `PM_ERR_CONFLICT`，
+  不会静默覆盖别人的时基（见 `docs/00-contract.md` §20）；
 - 异步接口统一走事件队列：ISR 只投递事件，用户回调只在 `pm_*_poll()` 的主循环上下文执行；
 - 静态分配、无 `malloc`；错误码为 `pm_err_t` 负值；超时语义统一（0 = 立即返回 `PM_ERR_AGAIN`，>0 = 有界等待）；
 - 换板子只改 `platform/stm32f103/board_f103c8.c` 的引脚表，换芯片只换一个 port 目录；
@@ -25,11 +28,15 @@
 | I2C | 已用板载 AHT20（0x70）验证读时序；OLED（0x7A）未验证 |
 | ADC | 未接真实信号源；只验证了转换流程与主机 mock |
 | PWM | 未接负载（电机 / 舵机 / 蜂鸣器）；只验证了配置与占空比换算 |
+| 软件音调 | 未上板；主机 mock 覆盖生命周期与参数校验，声学效果未验证 |
+| 循迹 | 未上板；只验证了极性判定与 PB14/SPI2 互斥逻辑 |
+| 编码器 | 未上板；只验证了 AB x4 解码表（主机单测） |
 
 已在真实板卡上验证的只有：时钟（HSE→PLL 72 MHz）、UART 收发，以及 I2C 对 AHT20 的读时序。
 
-此外当前不提供：DMA 通用抽象、RTC、Flash、看门狗、FreeRTOS 集成、CI、CMake presets；
-同一硬件定时器的通道共享周期，不同频率同时使用会返回 `PM_ERR_BUSY`。
+此外当前不提供：DMA 通用抽象、RTC、Flash、看门狗、FreeRTOS 集成、CMake presets；
+同一硬件定时器的通道共享周期，不同频率同时使用会返回 `PM_ERR_BUSY`，跨模块抢同一颗
+定时器返回 `PM_ERR_CONFLICT`。
 
 ---
 
@@ -39,12 +46,12 @@
 | --- | --- | --- |
 | 时钟 | HSE→PLL 72 MHz | `pm_clock_init()` 配置；HSE 起振失败回落 HSI 8 MHz，`pm_platform_core_clock()` 可读实际主频 |
 | ARM 交叉编译 | 通过 | `arm-none-eabi-gcc 14.3.1`，无项目代码警告 |
-| 链接 | 通过 | Flash 24424 B / 64 KB（37.27%），RAM 3104 B / 20 KB（15.16%） |
-| 产物 | 已生成 | `pm_f103_demo`（ELF）/ `.bin`（24424 B）/ `.hex` / `.map` |
-| 主机单测 | 通过 | 345 项断言，0 失败（MSVC 19.51，C11） |
+| 链接 | 通过 | Flash 28048 B / 64 KB（42.80%），RAM 3376 B / 20 KB（16.48%） |
+| 产物 | 已生成 | `pm_f103_demo`（ELF）/ `.bin`（28048 B）/ `.hex` / `.map` |
+| 主机单测 | 通过 | 458 项断言，0 失败（MSVC 19.51，C11） |
 | 动态分配 | 不存在 | `nm` 中无 `malloc` / `free` / `_sbrk` |
 | 向量表 | 正确 | 首字 `0x20005000`（20 KB RAM 顶），Reset_Handler `0x08000229`（Thumb） |
-| **上板运行** | **部分验证** | 时钟与 UART 收发已在真实板卡上验证；I2C 已用板载 AHT20（0x70）验证触发/读取时序；SPI、ADC、PWM 未接真实器件/负载 |
+| **上板运行** | **部分验证** | 时钟与 UART 收发已在真实板卡上验证；I2C 已用板载 AHT20（0x70）验证触发/读取时序；SPI、ADC、PWM、音调、循迹、编码器未接真实器件/负载 |
 
 未做上板验证的部分不写成"可用"。
 
@@ -61,8 +68,12 @@
 | v0.2 | + SPI（IT + DMA） | 13104 B（20.00%） | 2728 B（13.32%） | +5256 B / +504 B |
 | v0.3 | + UART RX 与 SPI MISO 引脚修复、I2C | 18896 B（28.83%） | 2840 B（13.87%） | +5792 B / +112 B |
 | v0.4 | + ADC（单次转换）与 PWM（TIM2/TIM4 比较输出） | 24424 B（37.27%） | 3104 B（15.16%） | +5528 B / +264 B |
+| v0.5 | + 软件音调 / 循迹 / 编码器 / 定时器仲裁 | 28048 B（42.80%） | 3376 B（16.48%） | +3624 B / +272 B |
 
-四行都在对应提交上重新 checkout、用全新构建目录实测，不是按差值推算。旧表中的
+v0.5 一行取自本次工作树的构建输出（提交后可用同一命令复现）；增量主要是 HAL TIM 更新
+中断路径、三组引脚/上下文表与 `pm_timer` 静态占用表（8 条）。
+
+v0.1–v0.4 四行都在对应提交上重新 checkout、用全新构建目录实测，不是按差值推算。旧表中的
 v0.1–v0.3 三行（6440 / 11704 / 18872 B）无法复现，已按实测值更正；时钟代码
 （HSE→PLL）在四个版本中相同，不再计入 v0.3 的增量。
 
@@ -92,8 +103,8 @@ v0.4 的 Flash 增量来自 HAL ADC（`HAL_ADC_Init`、`HAL_ADC_Start_IT`、
 > ```
 >
 > Flash/RAM 取链接器打印的 `Memory region` 表（`.bin` 大小与 Flash 占用一致）。
-> 对应提交：v0.1 `aa342e5`、v0.2 `917cc09`、v0.3 `7bde865`；v0.4 为 `main` 最新提交
-> （本次只改文档，源码未变，占用仍为 24424 B / 3104 B）。
+> 对应提交：v0.1 `aa342e5`、v0.2 `917cc09`、v0.3 `7bde865`；v0.4 为 `main` 最新提交。
+> v0.5 待本轮工作树提交后再补对应提交号。
 
 ---
 
@@ -104,8 +115,9 @@ docs/00-contract.md     接口契约（规范，先读这个）
 docs/01-layering.md     目录、依赖、时序、移植
 include/pm/             公共头，无厂商类型
 src/core/               与硬件无关的模型（可在主机编译）
+src/common/             与硬件无关的纯逻辑（时基数学、定时器仲裁），任何层可依赖
 src/osal/               Cortex-M3 的时基与临界区
-src/port/stm32f1/       HAL 后端、UART/SPI/I2C/ADC/PWM ISR、pm_port_get()
+src/port/stm32f1/       HAL 后端、UART/SPI/I2C/ADC/PWM/tone/track/encoder ISR、pm_port_get()
 platform/stm32f103/     板级引脚表、启动文件、链接脚本、HAL 配置
 tests/host/             内存 mock 后端 + 主机单测
 third_party/            CMSIS 与 ST HAL 子集（BSD-3-Clause，原样分发）
@@ -147,7 +159,7 @@ cmake --build build-host --config Debug
 ./build-host/Debug/pm_host_tests.exe
 ```
 
-输出形如 `345 checks, 0 failure(s)`，退出码 0 表示全过。
+输出形如 `458 checks, 0 failure(s)`，退出码 0 表示全过。
 
 ---
 
@@ -342,6 +354,43 @@ static const pm_pwm_cfg_t servo_cfg = {
 
 完整规则见 [docs/00-contract.md](docs/00-contract.md) 第 14 节。
 
+### 软件音调 / 循迹 / 编码器
+
+```c
+static pm_tone_t    s_tone;
+static pm_track_t   s_track;
+static pm_encoder_t s_enc;
+
+/* 蜂鸣器：TIM3 更新中断翻转 PB9，接口只有频率与占空比 */
+static const pm_tone_cfg_t tone_cfg = {
+    .hw_id = BOARD_TONE_BUZZER, .freq_hz = 2000u, .duty_permille = 500u,
+};
+(void)pm_tone_init(&s_tone, &tone_cfg);
+(void)pm_tone_set(&s_tone, 1000u, 500u);
+(void)pm_tone_off(&s_tone);          /* 静音；不是占空比 0 */
+
+/* 循迹：PB14 数字量，active_level 是配置而不是猜测 */
+static const pm_track_cfg_t track_cfg = {
+    .hw_id = BOARD_TRACK_LEFT, .active_level = PM_GPIO_LEVEL_LOW,
+};
+(void)pm_track_init(&s_track, &track_cfg);
+bool on_line = false;
+(void)pm_track_read_raw(&s_track, &on_line);
+
+/* 编码器：PA8/PA9 双沿，计数在 core 里解码 */
+static const pm_encoder_cfg_t enc_cfg = {
+    .hw_id = BOARD_ENCODER_LEFT, .invert = 0u,
+};
+(void)pm_encoder_init(&s_enc, &enc_cfg);
+int32_t ticks = pm_encoder_count(&s_enc);
+```
+
+- 音调的 tick 长度、占空比量化是端口实现细节，**不要在应用里依赖**；
+- 音调与 PWM 蜂鸣器在 PB9 上互斥，后开的返回 `PM_ERR_CONFLICT`；
+- 循迹与 SPI2 在 PB14 上互斥，后开的返回 `PM_ERR_CONFLICT`；
+- 编码器 `count` 由 ISR 写、主循环读；`pm_encoder_reset()` 不是中断安全的；
+- 三者都走定时器/引脚仲裁，规则见契约 §17–§20。
+
 ---
 
 ## 与四层架构的关系
@@ -354,6 +403,9 @@ APP → components → OSAL → BSP(本仓库的 pm_* 契约) → 芯片后端 �
 
 - `pm_osal.h` 是 OSAL 的对外面，裸机实现放在 `src/osal/`；
 - `pm_port.h` 是 BSP 的接缝，芯片实现放在 `src/port/`；
+- `common`（`include/pm/pm_common.h`、`pm_err.h`、`pm_pwm_math.h`、`pm_timer.h`，
+  实现 `src/common/`）是任何层可依赖的纯逻辑：错误码、定点数学、定时器仲裁；
+  common 不依赖任何层，也不得出现寄存器访问、HAL 调用或厂商头；
 - APP 与 components 只 include `include/pm/`。
 
 ---
@@ -379,15 +431,21 @@ python3 tools/check_layering.py . --roles .arch-roles
   链接脚本固定段冲突等。
 - **WARN** 是"需要人看，但按当前设计有意接受"的形态，只打印，不影响退出码与合并。
 
-当前基线：**0 ERROR / 14 WARN**。这 14 条 WARN 是同一类设计形态，不是待修问题：
+当前基线：**0 ERROR / 18 WARN**。这 18 条 WARN 是同一类设计形态，不是待修问题：
 
-- 5 条：`src/port/stm32f1/pm_port_stm32f1.c` 第 29/33/36/39/42 行 include 组件层头文件
-  （`pm_uart.h` 等），只取句柄类型与 ISR 钩子声明，不调用组件公开 API；
-- 9 条：同文件第 379/389/401/756/768/1137/1141/1361/1370 行调用 `pm_*_hw_*` ISR 钩子，
-  这些钩子按契约只允许端口层在中断上下文调用。
+- 8 条：`src/port/stm32f1/pm_port_stm32f1.c` 第 29/33/36/39/42/45/48/51 行 include 组件层
+  头文件（`pm_uart.h` 等八个模块），只取句柄类型与 ISR 钩子声明，不调用组件公开 API；
+- 10 条：同文件第 391/401/413/780/792/1161/1165/1385/1394/2349 行调用 `pm_*_hw_*`
+  ISR 钩子，这些钩子按契约只允许端口层在中断上下文调用。
 
 即：WARN 记录的是"依赖倒置 + 中断回投"这两条设计选择。WARN 数量或内容变化时，
 先确认没有新增真实的越层调用，再同步更新本节。
+
+**v0.5 修过一次真实的越层**：PWM 时基数学（`pm_pwm_timing_*`）与定时器仲裁（`pm_timer_*`）
+原先放在 `src/core/`（components），而端口必须直调它们，检查器报了 6 条 ERROR。
+修法是把契约头（`pm_pwm_math.h`、`pm_timer.h`）与实现（`src/common/`）判为 `common`，
+不是加转发函数。这 6 条当时只在工作树里、尚未提交；一旦提交，layering 作业会因退出码 1
+而失败——说明门禁有效，`ci.yml` 无需改动。
 
 `.arch-roles` 用两条 `ignore` 跳过非本仓代码：`ignore = third_party/`（CMSIS 与 ST HAL
 子集，厂商代码不参与分层，上游也推荐忽略而非映射成 `bsp`）与 `ignore = build-*/`
@@ -425,6 +483,12 @@ python3 tools/check_layering.py . --roles .arch-roles
 - ADC 只做单通道、单次、软件触发；没有扫描、连续转换、注入通道与 DMA；未上板验证；
 - PWM 只做比较输出（PWM 模式 1）；同一 TIM 的通道共享周期，舵机与蜂鸣器不能以不同
   频率同时挂在 TIM4；未上板验证；
+- 软件音调只做单音方波，不做包络/音量/多音混合；每 10 µs 一次更新中断，满频 5 kHz 时
+  中断率约 100 kHz；与 PWM 蜂鸣器在 PB9 上互斥；未上板，声学未验证；
+- 循迹只做单路数字量，不做多路阵列、阈值自适应与去抖；与 SPI2 在 PB14 上互斥；未上板；
+- 编码器只做 AB x4 计数，不做测速、Z 相与方向滤波；`reset` 非中断安全；未上板；
+- 定时器仲裁表固定 8 条、按 `hw_id` 逻辑编号；只判"能不能共存"，不做自动重分配；
+  参数兼容判据只有"同 PSC/ARR + 通道不重叠"一种；
 - SPI 只做主机、8 位帧、单传输（无队列）；MISO 在主机模式下配为输入上拉
   （RM0008 允许输入浮空或上拉），SCK/MOSI 为复用推挽；未接从机，未上板验证；
 - 本板 SPI 硬件 NSS 引脚（PA4 / PB12）已被 NTC、KEY1 占用，`PM_SPI_NSS_HARD` 会返回 `PM_ERR_PARAM`，只能用 GPIO 软件片选；

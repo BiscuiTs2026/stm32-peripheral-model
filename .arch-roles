@@ -16,6 +16,15 @@ include/pm/pm_port.h = bsp
 include/pm/pm_common.h = common
 include/pm/pm_err.h    = common
 
+# common = 与硬件无关的纯逻辑：错误码、定点/数学运算、资源占用仲裁。
+# 不得包含寄存器访问、HAL 调用、任何厂商头，以及任何针对具体外设的行为。
+# 方向：任何层可依赖 common，common 不依赖任何层。
+# 端口在写定时器寄存器前必须直调这些函数（PSC/ARR 规则只有一份实现），
+# 所以它们不能归 components，否则 bsp 就成了反向依赖。
+include/pm/pm_pwm_math.h = common
+include/pm/pm_timer.h    = common
+src/common/*             = common
+
 # 组件层公共契约 + 与硬件无关的模型
 include/pm/*        = components
 src/core/*          = components

@@ -89,4 +89,51 @@ typedef struct {
 
 extern const pm_f1_pwm_ctx_t pm_f1_pwm_ctx;
 
+/* Tone pin map: one GPIO flipped by the timer's update interrupt. */
+typedef struct {
+    GPIO_TypeDef *port;
+    uint16_t      pin;
+    TIM_TypeDef  *inst;
+    uint8_t       timer_index;   /* board_timer_id_t */
+} pm_f1_tone_pins_t;
+
+typedef struct {
+    const pm_f1_tone_pins_t *pins;
+    uint8_t                  count;
+} pm_f1_tone_ctx_t;
+
+extern const pm_f1_tone_ctx_t pm_f1_tone_ctx;
+
+/* Tracking input. `spi_hw_id` is the SPI instance that owns the same pin
+ * (0xFF when the pin is exclusive); pm_track refuses to open while that
+ * instance is open. */
+typedef struct {
+    GPIO_TypeDef *port;
+    uint16_t      pin;
+    uint8_t       spi_hw_id;
+} pm_f1_track_pins_t;
+
+typedef struct {
+    const pm_f1_track_pins_t *pins;
+    uint8_t                   count;
+} pm_f1_track_ctx_t;
+
+extern const pm_f1_track_ctx_t pm_f1_track_ctx;
+
+/* Quadrature encoder pin pair. Both pins use the same EXTI line group. */
+typedef struct {
+    GPIO_TypeDef *a_port;
+    uint16_t      a_pin;
+    GPIO_TypeDef *b_port;
+    uint16_t      b_pin;
+    IRQn_Type     irqn;
+} pm_f1_encoder_pins_t;
+
+typedef struct {
+    const pm_f1_encoder_pins_t *pins;
+    uint8_t                     count;
+} pm_f1_encoder_ctx_t;
+
+extern const pm_f1_encoder_ctx_t pm_f1_encoder_ctx;
+
 #endif /* PM_PORT_STM32F1_H */

@@ -22,6 +22,15 @@
 #if defined(PM_ENABLE_PWM)
 #include "pm_pwm.h"
 #endif
+#if defined(PM_ENABLE_TONE)
+#include "pm_tone.h"
+#endif
+#if defined(PM_ENABLE_TRACK)
+#include "pm_track.h"
+#endif
+#if defined(PM_ENABLE_ENCODER)
+#include "pm_encoder.h"
+#endif
 #include <string.h>
 
 static pm_gpio_level_t s_level[MOCK_GPIO_COUNT];
@@ -545,7 +554,174 @@ static const pm_pwm_ops_t s_pwm_ops = {
 
 #endif /* PM_ENABLE_PWM */
 
-/* ---------------------------------------------------------- port registry */
+#if defined(PM_ENABLE_TONE)
+/* ------------------------------------------------------------------ TONE */
+
+static uint8_t  s_tone_open[MOCK_TONE_COUNT];
+static uint8_t  s_tone_active[MOCK_TONE_COUNT];
+static uint32_t s_tone_freq[MOCK_TONE_COUNT];
+static uint16_t s_tone_duty[MOCK_TONE_COUNT];
+
+static pm_err_t mock_tone_open(void *ctx, pm_tone_t *t, const pm_tone_cfg_t *cfg)
+{
+    (void)ctx;
+    (void)t;
+
+    if ((cfg == NULL) || (cfg->hw_id >= MOCK_TONE_COUNT)) {
+        return PM_ERR_RANGE;
+    }
+    if (s_tone_open[cfg->hw_id] != 0u) {
+        return PM_ERR_BUSY;
+    }
+
+    s_tone_open[cfg->hw_id]   = 1u;
+    s_tone_active[cfg->hw_id] = 1u;
+    s_tone_freq[cfg->hw_id]   = cfg->freq_hz;
+    s_tone_duty[cfg->hw_id]   = cfg->duty_permille;
+    return PM_OK;
+}
+
+static void mock_tone_close(void *ctx, pm_tone_t *t)
+{
+    (void)ctx;
+
+    if ((t != NULL) && (t->hw_id < MOCK_TONE_COUNT)) {
+        s_tone_open[t->hw_id]   = 0u;
+        s_tone_active[t->hw_id] = 0u;
+        s_tone_freq[t->hw_id]   = 0u;
+        s_tone_duty[t->hw_id]   = 0u;
+    }
+}
+
+static pm_err_t mock_tone_set(void *ctx, pm_tone_t *t, uint32_t freq_hz,
+                              uint16_t duty_permille)
+{
+    (void)ctx;
+
+    if ((t == NULL) || (t->hw_id >= MOCK_TONE_COUNT) ||
+        (s_tone_open[t->hw_id] == 0u)) {
+        return PM_ERR_STATE;
+    }
+    s_tone_freq[t->hw_id]   = freq_hz;
+    s_tone_duty[t->hw_id]   = duty_permille;
+    s_tone_active[t->hw_id] = 1u;
+    return PM_OK;
+}
+
+static pm_err_t mock_tone_off(void *ctx, pm_tone_t *t)
+{
+    (void)ctx;
+
+    if ((t == NULL) || (t->hw_id >= MOCK_TONE_COUNT) ||
+        (s_tone_open[t->hw_id] == 0u)) {
+        return PM_ERR_STATE;
+    }
+    s_tone_active[t->hw_id] = 0u;
+    return PM_OK;
+}
+
+static const pm_tone_ops_t s_tone_ops = {
+    .open  = mock_tone_open,
+    .close = mock_tone_close,
+    .set   = mock_tone_set,
+    .off   = mock_tone_off,
+};
+
+#endif /* PM_ENABLE_TONE */
+
+#if defined(PM_ENABLE_TRACK)
+/* ----------------------------------------------------------------- TRACK */
+
+static uint8_t         s_track_open[MOCK_TRACK_COUNT];
+static pm_gpio_level_t s_track_level[MOCK_TRACK_COUNT] = { PM_GPIO_LEVEL_HIGH };
+
+static pm_err_t mock_track_open(void *ctx, pm_track_t *t,
+                                const pm_track_cfg_t *cfg)
+{
+    (void)ctx;
+    (void)t;
+
+    if ((cfg == NULL) || (cfg->hw_id >= MOCK_TRACK_COUNT)) {
+        return PM_ERR_RANGE;
+    }
+    if (s_track_open[cfg->hw_id] != 0u) {
+        return PM_ERR_BUSY;
+    }
+    s_track_open[cfg->hw_id] = 1u;
+    return PM_OK;
+}
+
+static void mock_track_close(void *ctx, pm_track_t *t)
+{
+    (void)ctx;
+
+    if ((t != NULL) && (t->hw_id < MOCK_TRACK_COUNT)) {
+        s_track_open[t->hw_id] = 0u;
+    }
+}
+
+static pm_err_t mock_track_read(void *ctx, pm_track_t *t, bool *high)
+{
+    (void)ctx;
+
+    if ((t == NULL) || (high == NULL) || (t->hw_id >= MOCK_TRACK_COUNT)) {
+        return PM_ERR_RANGE;
+    }
+    if (s_track_open[t->hw_id] == 0u) {
+        return PM_ERR_STATE;
+    }
+    *high = (s_track_level[t->hw_id] == PM_GPIO_LEVEL_HIGH);
+    return PM_OK;
+}
+
+static const pm_track_ops_t s_track_ops = {
+    .open  = mock_track_open,
+    .close = mock_track_close,
+    .read  = mock_track_read,
+};
+
+#endif /* PM_ENABLE_TRACK */
+
+#if defined(PM_ENABLE_ENCODER)
+/* --------------------------------------------------------------- ENCODER */
+
+static uint8_t s_encoder_open[MOCK_ENCODER_COUNT];
+static uint8_t s_encoder_ab[MOCK_ENCODER_COUNT];
+
+static pm_err_t mock_encoder_open(void *ctx, pm_encoder_t *e,
+                                  const pm_encoder_cfg_t *cfg,
+                                  uint8_t *initial_ab)
+{
+    (void)ctx;
+    (void)e;
+
+    if ((cfg == NULL) || (initial_ab == NULL) ||
+        (cfg->hw_id >= MOCK_ENCODER_COUNT)) {
+        return PM_ERR_RANGE;
+    }
+    if (s_encoder_open[cfg->hw_id] != 0u) {
+        return PM_ERR_BUSY;
+    }
+    s_encoder_open[cfg->hw_id] = 1u;
+    *initial_ab = s_encoder_ab[cfg->hw_id];
+    return PM_OK;
+}
+
+static void mock_encoder_close(void *ctx, pm_encoder_t *e)
+{
+    (void)ctx;
+
+    if ((e != NULL) && (e->hw_id < MOCK_ENCODER_COUNT)) {
+        s_encoder_open[e->hw_id] = 0u;
+    }
+}
+
+static const pm_encoder_ops_t s_encoder_ops = {
+    .open  = mock_encoder_open,
+    .close = mock_encoder_close,
+};
+
+#endif /* PM_ENABLE_ENCODER */
 
 static const pm_port_t s_port = {
     .gpio           = &s_gpio_ops,
@@ -573,6 +749,21 @@ static const pm_port_t s_port = {
     .pwm            = &s_pwm_ops,
     .pwm_ctx        = NULL,
     .pwm_count      = (uint8_t)MOCK_PWM_COUNT,
+#endif
+#if defined(PM_ENABLE_TONE)
+    .tone           = &s_tone_ops,
+    .tone_ctx       = NULL,
+    .tone_count     = (uint8_t)MOCK_TONE_COUNT,
+#endif
+#if defined(PM_ENABLE_TRACK)
+    .track          = &s_track_ops,
+    .track_ctx      = NULL,
+    .track_count    = (uint8_t)MOCK_TRACK_COUNT,
+#endif
+#if defined(PM_ENABLE_ENCODER)
+    .encoder        = &s_encoder_ops,
+    .encoder_ctx    = NULL,
+    .encoder_count  = (uint8_t)MOCK_ENCODER_COUNT,
 #endif
 };
 
@@ -631,6 +822,29 @@ void mock_reset(void)
     memset(s_pwm_enabled, 0, sizeof(s_pwm_enabled));
     memset(s_pwm_freq, 0, sizeof(s_pwm_freq));
     memset(s_pwm_duty, 0, sizeof(s_pwm_duty));
+#endif
+
+#if defined(PM_ENABLE_TONE)
+    memset(s_tone_open, 0, sizeof(s_tone_open));
+    memset(s_tone_active, 0, sizeof(s_tone_active));
+    memset(s_tone_freq, 0, sizeof(s_tone_freq));
+    memset(s_tone_duty, 0, sizeof(s_tone_duty));
+#endif
+
+#if defined(PM_ENABLE_TRACK)
+    memset(s_track_open, 0, sizeof(s_track_open));
+    {
+        uint8_t i;
+
+        for (i = 0u; i < MOCK_TRACK_COUNT; i++) {
+            s_track_level[i] = PM_GPIO_LEVEL_HIGH;
+        }
+    }
+#endif
+
+#if defined(PM_ENABLE_ENCODER)
+    memset(s_encoder_open, 0, sizeof(s_encoder_open));
+    memset(s_encoder_ab, 0, sizeof(s_encoder_ab));
 #endif
 }
 
@@ -818,3 +1032,56 @@ int mock_pwm_is_enabled(uint8_t hw_id)
 }
 
 #endif /* PM_ENABLE_PWM */
+
+#if defined(PM_ENABLE_TONE)
+int mock_tone_is_open(uint8_t hw_id)
+{
+    return (hw_id < MOCK_TONE_COUNT) ? (int)s_tone_open[hw_id] : 0;
+}
+
+int mock_tone_is_active(uint8_t hw_id)
+{
+    return (hw_id < MOCK_TONE_COUNT) ? (int)s_tone_active[hw_id] : 0;
+}
+
+uint32_t mock_tone_frequency(uint8_t hw_id)
+{
+    return (hw_id < MOCK_TONE_COUNT) ? s_tone_freq[hw_id] : 0u;
+}
+
+uint16_t mock_tone_duty(uint8_t hw_id)
+{
+    return (hw_id < MOCK_TONE_COUNT) ? s_tone_duty[hw_id] : 0u;
+}
+
+#endif /* PM_ENABLE_TONE */
+
+#if defined(PM_ENABLE_TRACK)
+void mock_track_set_level(uint8_t hw_id, pm_gpio_level_t level)
+{
+    if (hw_id < MOCK_TRACK_COUNT) {
+        s_track_level[hw_id] = level;
+    }
+}
+
+int mock_track_is_open(uint8_t hw_id)
+{
+    return (hw_id < MOCK_TRACK_COUNT) ? (int)s_track_open[hw_id] : 0;
+}
+
+#endif /* PM_ENABLE_TRACK */
+
+#if defined(PM_ENABLE_ENCODER)
+void mock_encoder_set_initial_ab(uint8_t hw_id, uint8_t ab)
+{
+    if (hw_id < MOCK_ENCODER_COUNT) {
+        s_encoder_ab[hw_id] = (uint8_t)(ab & 0x03u);
+    }
+}
+
+int mock_encoder_is_open(uint8_t hw_id)
+{
+    return (hw_id < MOCK_ENCODER_COUNT) ? (int)s_encoder_open[hw_id] : 0;
+}
+
+#endif /* PM_ENABLE_ENCODER */

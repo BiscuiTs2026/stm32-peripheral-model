@@ -48,15 +48,50 @@ const pm_f1_adc_ctx_t pm_f1_adc_ctx = {
     .count    = (uint8_t)BOARD_ADC_COUNT,
 };
 
-/* timer_index: 0 = TIM2, 1 = TIM4 (must match the port's timer table). */
+/* timer_index uses board_timer_id_t (must match the port's timer table). */
 static const pm_f1_pwm_pins_t s_pwm_pins[BOARD_PWM_COUNT] = {
-    [BOARD_PWM_MOTOR_A] = { GPIOA, GPIO_PIN_0, TIM2, TIM_CHANNEL_1, 0u },
-    [BOARD_PWM_MOTOR_B] = { GPIOA, GPIO_PIN_1, TIM2, TIM_CHANNEL_2, 0u },
-    [BOARD_PWM_SERVO]   = { GPIOB, GPIO_PIN_8, TIM4, TIM_CHANNEL_3, 1u },
-    [BOARD_PWM_BUZZER]  = { GPIOB, GPIO_PIN_9, TIM4, TIM_CHANNEL_4, 1u },
+    [BOARD_PWM_MOTOR_A] = { GPIOA, GPIO_PIN_0, TIM2, TIM_CHANNEL_1,
+                            BOARD_TIM_2 },
+    [BOARD_PWM_MOTOR_B] = { GPIOA, GPIO_PIN_1, TIM2, TIM_CHANNEL_2,
+                            BOARD_TIM_2 },
+    [BOARD_PWM_SERVO]   = { GPIOB, GPIO_PIN_8, TIM4, TIM_CHANNEL_3,
+                            BOARD_TIM_4 },
+    [BOARD_PWM_BUZZER]  = { GPIOB, GPIO_PIN_9, TIM4, TIM_CHANNEL_4,
+                            BOARD_TIM_4 },
 };
 
 const pm_f1_pwm_ctx_t pm_f1_pwm_ctx = {
     .pins  = s_pwm_pins,
     .count = (uint8_t)BOARD_PWM_COUNT,
+};
+
+/* Software tone: PB9 toggled from the TIM3 update interrupt. */
+static const pm_f1_tone_pins_t s_tone_pins[BOARD_TONE_COUNT] = {
+    [BOARD_TONE_BUZZER] = { GPIOB, GPIO_PIN_9, TIM3, BOARD_TIM_3 },
+};
+
+const pm_f1_tone_ctx_t pm_f1_tone_ctx = {
+    .pins  = s_tone_pins,
+    .count = (uint8_t)BOARD_TONE_COUNT,
+};
+
+/* Tracking input: PB14 with the internal pull-up, shared with SPI2_MISO. */
+static const pm_f1_track_pins_t s_track_pins[BOARD_TRACK_COUNT] = {
+    [BOARD_TRACK_LEFT] = { GPIOB, GPIO_PIN_14, BOARD_SPI_2 },
+};
+
+const pm_f1_track_ctx_t pm_f1_track_ctx = {
+    .pins  = s_track_pins,
+    .count = (uint8_t)BOARD_TRACK_COUNT,
+};
+
+/* Encoder: A = PA8, B = PA9, both edges on EXTI9_5. */
+static const pm_f1_encoder_pins_t s_encoder_pins[BOARD_ENCODER_COUNT] = {
+    [BOARD_ENCODER_LEFT] = { GPIOA, GPIO_PIN_8, GPIOA, GPIO_PIN_9,
+                             EXTI9_5_IRQn },
+};
+
+const pm_f1_encoder_ctx_t pm_f1_encoder_ctx = {
+    .pins  = s_encoder_pins,
+    .count = (uint8_t)BOARD_ENCODER_COUNT,
 };

@@ -254,6 +254,61 @@ typedef struct {
     pm_err_t (*enable)(void *ctx, pm_pwm_t *p, bool on);
 } pm_pwm_ops_t;
 
+/* ------------------------------------------------------------------ TONE */
+
+typedef struct {
+    uint8_t  hw_id;
+    uint32_t freq_hz;
+    uint16_t duty_permille;
+} pm_tone_cfg_t;
+
+typedef struct pm_tone pm_tone_t;
+
+typedef struct {
+    /* open() claims the timer through pm_timer.h and starts the tick.
+     * off() stops the tick and leaves the pin at its idle level. */
+    pm_err_t (*open)(void *ctx, pm_tone_t *t, const pm_tone_cfg_t *cfg);
+    void     (*close)(void *ctx, pm_tone_t *t);
+    pm_err_t (*set)(void *ctx, pm_tone_t *t, uint32_t freq_hz,
+                    uint16_t duty_permille);
+    pm_err_t (*off)(void *ctx, pm_tone_t *t);
+} pm_tone_ops_t;
+
+/* ----------------------------------------------------------------- TRACK */
+
+typedef struct {
+    uint8_t hw_id;
+    uint8_t active_level;   /* pm_gpio_level_t value */
+} pm_track_cfg_t;
+
+typedef struct pm_track pm_track_t;
+
+typedef struct {
+    /* read() returns the raw electrical level (true = high). The polarity
+     * decision belongs to the core. */
+    pm_err_t (*open)(void *ctx, pm_track_t *t, const pm_track_cfg_t *cfg);
+    void     (*close)(void *ctx, pm_track_t *t);
+    pm_err_t (*read)(void *ctx, pm_track_t *t, bool *high);
+} pm_track_ops_t;
+
+/* --------------------------------------------------------------- ENCODER */
+
+typedef struct {
+    uint8_t hw_id;
+    uint8_t invert;
+} pm_encoder_cfg_t;
+
+typedef struct pm_encoder pm_encoder_t;
+
+typedef struct {
+    /* open() configures both inputs and the edge interrupt, and reports the
+     * AB state it found so the core can adopt it without counting a step.
+     * Edges are delivered to the core with pm_encoder_hw_edge(). */
+    pm_err_t (*open)(void *ctx, pm_encoder_t *e, const pm_encoder_cfg_t *cfg,
+                     uint8_t *initial_ab);
+    void     (*close)(void *ctx, pm_encoder_t *e);
+} pm_encoder_ops_t;
+
 /* ----------------------------------------------------------- port registry */
 
 typedef struct {
@@ -280,6 +335,18 @@ typedef struct {
     const pm_pwm_ops_t  *pwm;
     void                *pwm_ctx;
     uint8_t              pwm_count;        /* valid hw_id are [0, count) */
+
+    const pm_tone_ops_t *tone;
+    void                *tone_ctx;
+    uint8_t              tone_count;
+
+    const pm_track_ops_t *track;
+    void                 *track_ctx;
+    uint8_t               track_count;
+
+    const pm_encoder_ops_t *encoder;
+    void                   *encoder_ctx;
+    uint8_t                 encoder_count;
 } pm_port_t;
 
 const pm_port_t *pm_port_get(void);

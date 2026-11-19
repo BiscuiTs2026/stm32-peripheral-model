@@ -23,10 +23,9 @@
 #include "pm_common.h"
 #include "pm_err.h"
 #include "pm_port.h"
+#include "pm_pwm_math.h"   /* common layer: the PSC/ARR rule the ports call */
 
 #define PM_PWM_DUTY_MAX  1000u
-#define PM_PWM_FREQ_MIN  1u
-#define PM_PWM_FREQ_MAX  1000000u
 
 struct pm_pwm {
     uint32_t magic;          /* set by pm_pwm_init, cleared by deinit */

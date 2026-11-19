@@ -66,4 +66,35 @@ typedef enum {
     BOARD_PWM_COUNT
 } board_pwm_id_t;
 
+/* Logical timer ids, used by pm_timer.h claims and by the PWM timer table.
+ * TIM2 has no remap option for PA0/PA1 on this package, so motor PWM and a
+ * free-running TIM2 counter cannot coexist (docs/00-contract.md section 18). */
+typedef enum {
+    BOARD_TIM_2 = 0,
+    BOARD_TIM_3,
+    BOARD_TIM_4,
+    BOARD_TIM_COUNT
+} board_timer_id_t;
+
+/* Software-tone outputs. PB9 is also BOARD_PWM_BUZZER: the two backends must
+ * not be open at the same time. */
+typedef enum {
+    BOARD_TONE_BUZZER = 0,  /* PB9 via TIM3 update interrupt */
+    BOARD_TONE_COUNT
+} board_tone_id_t;
+
+/* Line-tracking inputs. PB14 is SPI2_MISO, so the sensor and SPI2 are
+ * mutually exclusive (docs/00-contract.md section 18). */
+typedef enum {
+    BOARD_TRACK_LEFT = 0,   /* PB14, internal pull-up */
+    BOARD_TRACK_COUNT
+} board_track_id_t;
+
+/* Quadrature encoders. PB15 (the encoder push button) is SPI2_MOSI and is not
+ * part of this module. */
+typedef enum {
+    BOARD_ENCODER_LEFT = 0, /* PA8 = A, PA9 = B, both edges */
+    BOARD_ENCODER_COUNT
+} board_encoder_id_t;
+
 #endif /* BOARD_F103C8_H */

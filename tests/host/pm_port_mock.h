@@ -13,6 +13,9 @@
 #define MOCK_ADC_COUNT  1u
 #define MOCK_ADC_CHANNELS 2u
 #define MOCK_PWM_COUNT  4u
+#define MOCK_TONE_COUNT 1u
+#define MOCK_TRACK_COUNT 1u
+#define MOCK_ENCODER_COUNT 1u
 #define MOCK_TX_CAPTURE_SIZE 4096u
 #define MOCK_SPI_CAPTURE_SIZE 256u
 #define MOCK_I2C_CAPTURE_SIZE 256u
@@ -63,5 +66,20 @@ int             mock_pwm_is_open(uint8_t hw_id);
 uint32_t        mock_pwm_frequency(uint8_t hw_id);
 uint16_t        mock_pwm_duty(uint8_t hw_id);
 int             mock_pwm_is_enabled(uint8_t hw_id);
+
+/* Tone: the mock records the last parameters and whether the tick is on. */
+int             mock_tone_is_open(uint8_t hw_id);
+int             mock_tone_is_active(uint8_t hw_id);
+uint32_t        mock_tone_frequency(uint8_t hw_id);
+uint16_t        mock_tone_duty(uint8_t hw_id);
+
+/* Track: set the level the next read returns. */
+void            mock_track_set_level(uint8_t hw_id, pm_gpio_level_t level);
+int             mock_track_is_open(uint8_t hw_id);
+
+/* Encoder: the AB state the port reports at open. Edges are injected with
+ * pm_encoder_hw_edge() directly by the test. */
+void            mock_encoder_set_initial_ab(uint8_t hw_id, uint8_t ab);
+int             mock_encoder_is_open(uint8_t hw_id);
 
 #endif /* PM_PORT_MOCK_H */

@@ -41,6 +41,18 @@
 #if defined(PM_ENABLE_PWM)
 #include "pm_pwm.h"
 #endif
+#if defined(PM_ENABLE_TONE)
+#include "pm_tone.h"
+#endif
+#if defined(PM_ENABLE_TRACK)
+#include "pm_track.h"
+#endif
+#if defined(PM_ENABLE_ENCODER)
+#include "pm_encoder.h"
+#endif
+#include "pm_timer.h"
+
+#include <string.h>
 
 #include "stm32f1xx_hal.h"
 
@@ -565,6 +577,12 @@ static void spi_dma_deinit(pm_f1_spi_t *h)
     (void)HAL_DMA_DeInit(&h->hdma_rx);
 }
 
+#if defined(PM_ENABLE_TRACK)
+/* Defined in the track section below; used by f1_spi_open() to refuse a pin
+ * that a tracking sensor already owns. */
+static bool track_uses_spi(uint8_t spi_id);
+#endif
+
 static pm_err_t f1_spi_open(void *ctx, pm_spi_t *s, const pm_spi_cfg_t *cfg,
                             uint32_t *actual_hz)
 {
@@ -585,6 +603,12 @@ static pm_err_t f1_spi_open(void *ctx, pm_spi_t *s, const pm_spi_cfg_t *cfg,
     if (h->opened != 0u) {
         return PM_ERR_BUSY;
     }
+#if defined(PM_ENABLE_TRACK)
+    if (track_uses_spi(cfg->hw_id)) {
+        /* A tracking sensor owns one of this instance's pins. */
+        return PM_ERR_CONFLICT;
+    }
+#endif
 
     pins = &c->pins[cfg->hw_id];
     if ((pins->sck_port == NULL) || (pins->miso_port == NULL) ||
@@ -1378,11 +1402,21 @@ void ADC1_2_IRQHandler(void)
 
 #endif /* PM_ENABLE_ADC */
 
+/* APB1 timer clock doubles when the APB1 prescaler is not 1. Shared by every
+ * module that owns a TIMx on this chip (PWM, tone). */
+static uint32_t f1_apb1_timer_clock(void)
+{
+    uint32_t pclk1 = HAL_RCC_GetPCLK1Freq();
+
+    return (((RCC->CFGR & RCC_CFGR_PPRE1) == RCC_CFGR_PPRE1_DIV1) ? pclk1
+                                                                  : (pclk1 * 2u));
+}
+
 #if defined(PM_ENABLE_PWM)
 /* ------------------------------------------------------------------- PWM */
 
 #define PM_F1_PWM_COUNT       4u
-#define PM_F1_PWM_TIMER_COUNT 2u
+#define PM_F1_PWM_TIMER_COUNT 3u
 #define PM_F1_PWM_NO_CHANNEL  0xFFu
 
 typedef struct {
@@ -1402,9 +1436,10 @@ typedef struct {
     uint16_t permille;
 } pm_f1_pwm_ch_t;
 
-/* timer_index used by the board table: 0 = TIM2, 1 = TIM4. */
+/* timer_index uses board_timer_id_t: 0 = TIM2, 1 = TIM3, 2 = TIM4. */
 static pm_f1_pwm_timer_t s_pwm_timer[PM_F1_PWM_TIMER_COUNT] = {
     { .inst = TIM2 },
+    { .inst = TIM3 },
     { .inst = TIM4 },
 };
 
@@ -1425,59 +1460,17 @@ static void pwm_timer_clk_enable(TIM_TypeDef *inst)
 {
     if (inst == TIM2) {
         __HAL_RCC_TIM2_CLK_ENABLE();
+    } else if (inst == TIM3) {
+        __HAL_RCC_TIM3_CLK_ENABLE();
     } else if (inst == TIM4) {
         __HAL_RCC_TIM4_CLK_ENABLE();
     }
 }
 
-/* APB1 timer clock doubles when the APB1 prescaler is not 1. */
-static uint32_t pwm_timer_clock(void)
-{
-    uint32_t pclk1 = HAL_RCC_GetPCLK1Freq();
-
-    return (((RCC->CFGR & RCC_CFGR_PPRE1) == RCC_CFGR_PPRE1_DIV1) ? pclk1
-                                                                  : (pclk1 * 2u));
-}
-
-/* Picks the prescaler first so the 16-bit ARR can hold the whole period. */
-static void pwm_compute(uint32_t tim_clk, uint32_t freq,
-                        uint16_t *psc, uint16_t *arr)
-{
-    uint32_t p = (tim_clk / freq) / 65536u;
-    uint32_t a;
-
-    if (p > 65535u) {
-        p = 65535u;
-    }
-    a = (tim_clk / (p + 1u)) / freq;
-    if (a == 0u) {
-        a = 1u;
-    }
-    if (a > 65536u) {
-        a = 65536u;
-    }
-    *psc = (uint16_t)p;
-    *arr = (uint16_t)(a - 1u);
-}
-
 static uint32_t pwm_actual_hz(const pm_f1_pwm_timer_t *t)
 {
-    return pwm_timer_clock() /
+    return f1_apb1_timer_clock() /
            ((uint32_t)(t->psc + 1u) * ((uint32_t)t->arr + 1u));
-}
-
-static uint32_t pwm_compare_value(uint16_t arr, uint16_t permille)
-{
-    uint32_t period = (uint32_t)arr + 1u;
-    uint32_t compare = (period * permille) / 1000u;
-
-    if (compare > period) {
-        compare = period;
-    }
-    if (compare > 0xFFFFu) {
-        compare = 0xFFFFu;        /* one tick lost at 100% on a 65536-tick period */
-    }
-    return compare;
 }
 
 static void pwm_gpio_init(const pm_f1_pwm_pins_t *pins)
@@ -1499,7 +1492,7 @@ static pm_err_t pwm_channel_config(pm_f1_pwm_timer_t *t, uint32_t channel,
     TIM_OC_InitTypeDef oc;
 
     oc.OCMode       = TIM_OCMODE_PWM1;
-    oc.Pulse        = pwm_compare_value(t->arr, permille);
+    oc.Pulse        = pm_pwm_compare_count(t->arr, permille);
     oc.OCPolarity   = TIM_OCPOLARITY_HIGH;
     oc.OCNPolarity  = TIM_OCNPOLARITY_HIGH;
     oc.OCFastMode   = TIM_OCFAST_DISABLE;
@@ -1523,7 +1516,7 @@ static void pwm_refresh_compare(pm_f1_pwm_timer_t *t, uint8_t timer_index,
 
         if ((s_pwm[i].opened != 0u) && (pins->timer_index == timer_index)) {
             __HAL_TIM_SET_COMPARE(&t->htim, pins->channel,
-                                  pwm_compare_value(t->arr, s_pwm[i].permille));
+                                  pm_pwm_compare_count(t->arr, s_pwm[i].permille));
         }
     }
 }
@@ -1538,6 +1531,7 @@ static pm_err_t f1_pwm_open(void *ctx, pm_pwm_t *p, const pm_pwm_cfg_t *cfg,
     uint8_t                 ci;
     uint16_t                psc;
     uint16_t                arr;
+    pm_err_t                rc;
 
     if ((c == NULL) || (p == NULL) || (cfg == NULL) || (actual_hz == NULL)) {
         return PM_ERR_NULL;
@@ -1573,9 +1567,47 @@ static pm_err_t f1_pwm_open(void *ctx, pm_pwm_t *p, const pm_pwm_cfg_t *cfg,
         if (t->freq_req != cfg->freq_hz) {
             return PM_ERR_BUSY;
         }
+        psc = t->psc;
+        arr = t->arr;
     } else {
-        pwm_compute(pwm_timer_clock(), cfg->freq_hz, &psc, &arr);
+        pm_pwm_timing_t timing;
 
+        rc = pm_pwm_timing_compute(f1_apb1_timer_clock(), cfg->freq_hz,
+                                   &timing);
+        if (rc != PM_OK) {
+            return rc;
+        }
+        psc = timing.psc;
+        arr = timing.arr;
+    }
+
+    /* Declare the timer before touching a register: another module (tone or,
+     * later, a counter) already on this TIM means PM_ERR_CONFLICT instead of
+     * silently rewriting its time base (docs/00-contract.md section 20). */
+    {
+        pm_timer_claim_t claim;
+
+        claim.hw_id    = pins->timer_index;
+        claim.owner_id = cfg->hw_id;
+        claim.role     = PM_TIMER_ROLE_PWM;
+        claim.psc      = psc;
+        claim.arr      = arr;
+        claim.channels = (uint8_t)(1u << ci);
+
+        rc = pm_timer_claim(&claim);
+        if (rc != PM_OK) {
+            return rc;
+        }
+    }
+
+    /* Mandatory self-check of the exact pair about to be programmed. */
+    if (!pm_pwm_timing_matches(f1_apb1_timer_clock(), psc, arr, cfg->freq_hz,
+                               10u)) {
+        (void)pm_timer_release(pins->timer_index, cfg->hw_id);
+        return PM_ERR_PARAM;
+    }
+
+    if (t->open_mask == 0u) {
         pwm_timer_clk_enable(t->inst);
         t->psc    = psc;
         t->arr    = arr;
@@ -1590,6 +1622,7 @@ static pm_err_t f1_pwm_open(void *ctx, pm_pwm_t *p, const pm_pwm_cfg_t *cfg,
         t->htim.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
 
         if (HAL_TIM_PWM_Init(&t->htim) != HAL_OK) {
+            (void)pm_timer_release(pins->timer_index, cfg->hw_id);
             return PM_ERR_IO;
         }
         t->inited = 1u;
@@ -1601,6 +1634,7 @@ static pm_err_t f1_pwm_open(void *ctx, pm_pwm_t *p, const pm_pwm_cfg_t *cfg,
             (void)HAL_TIM_Base_DeInit(&t->htim);
             t->inited = 0u;
         }
+        (void)pm_timer_release(pins->timer_index, cfg->hw_id);
         return PM_ERR_IO;
     }
     if (HAL_TIM_PWM_Start(&t->htim, pins->channel) != HAL_OK) {
@@ -1608,6 +1642,7 @@ static pm_err_t f1_pwm_open(void *ctx, pm_pwm_t *p, const pm_pwm_cfg_t *cfg,
             (void)HAL_TIM_Base_DeInit(&t->htim);
             t->inited = 0u;
         }
+        (void)pm_timer_release(pins->timer_index, cfg->hw_id);
         return PM_ERR_IO;
     }
 
@@ -1642,6 +1677,7 @@ static void f1_pwm_close(void *ctx, pm_pwm_t *p)
 
     (void)HAL_TIM_PWM_Stop(&t->htim, pins->channel);
     t->open_mask = (uint8_t)(t->open_mask & (uint8_t)~(1u << ch->ch_index));
+    (void)pm_timer_release(pins->timer_index, p->hw_id);
 
     if (t->open_mask == 0u) {
         (void)HAL_TIM_Base_DeInit(&t->htim);
@@ -1688,7 +1724,24 @@ static pm_err_t f1_pwm_set_freq(void *ctx, pm_pwm_t *p, uint32_t freq_hz,
         return PM_ERR_BUSY;
     }
 
-    pwm_compute(pwm_timer_clock(), freq_hz, &psc, &arr);
+    {
+        pm_pwm_timing_t timing;
+        pm_err_t        rc;
+
+        rc = pm_pwm_timing_compute(f1_apb1_timer_clock(), freq_hz, &timing);
+        if (rc != PM_OK) {
+            return rc;
+        }
+        psc = timing.psc;
+        arr = timing.arr;
+
+        /* The occupation table must agree with the registers, including for
+         * the sibling channels that share this time base. */
+        rc = pm_timer_retime(pins->timer_index, p->hw_id, psc, arr);
+        if (rc != PM_OK) {
+            return rc;
+        }
+    }
     t->psc      = psc;
     t->arr      = arr;
     t->freq_req = freq_hz;
@@ -1724,7 +1777,7 @@ static pm_err_t f1_pwm_set_duty(void *ctx, pm_pwm_t *p, uint16_t permille)
     t    = &s_pwm_timer[pins->timer_index];
 
     __HAL_TIM_SET_COMPARE(&t->htim, pins->channel,
-                          pwm_compare_value(t->arr, permille));
+                          pm_pwm_compare_count(t->arr, permille));
     ch->permille = permille;
     return PM_OK;
 }
@@ -1770,6 +1823,540 @@ static const pm_pwm_ops_t s_pwm_ops = {
 
 #endif /* PM_ENABLE_PWM */
 
+#if defined(PM_ENABLE_TONE)
+/* ------------------------------------------------------------------ TONE */
+/*
+ * Port implementation detail, not part of the public contract (section 15):
+ *  - one update interrupt every 10 us, PSC derived from the APB1 timer clock;
+ *  - period_ticks = 100000 / freq_hz;
+ *  - duty_ticks   = period_ticks * permille / 1000, quantised to whole ticks.
+ * At 72 MHz this is PSC = 719. The board-verified buzzer path is exactly this
+ * shape (TIM3 update interrupt toggling PB9).
+ */
+#define PM_F1_TONE_TICK_HZ 100000u
+#define PM_F1_TONE_COUNT   1u
+
+typedef struct {
+    uint8_t           opened;
+    uint8_t           active;
+    uint8_t           timer_index;
+    TIM_HandleTypeDef htim;
+    TIM_TypeDef      *inst;
+    GPIO_TypeDef     *port;
+    uint16_t          pin;
+    uint16_t          period_ticks;
+    uint16_t          duty_ticks;
+    uint16_t          tick;
+} pm_f1_tone_t;
+
+static pm_f1_tone_t s_tone[PM_F1_TONE_COUNT];
+
+static void tone_timer_clk_enable(TIM_TypeDef *inst)
+{
+    if (inst == TIM2) {
+        __HAL_RCC_TIM2_CLK_ENABLE();
+    } else if (inst == TIM3) {
+        __HAL_RCC_TIM3_CLK_ENABLE();
+    } else if (inst == TIM4) {
+        __HAL_RCC_TIM4_CLK_ENABLE();
+    }
+}
+
+static IRQn_Type tone_irqn(TIM_TypeDef *inst)
+{
+    if (inst == TIM2) {
+        return TIM2_IRQn;
+    }
+    if (inst == TIM4) {
+        return TIM4_IRQn;
+    }
+    return TIM3_IRQn;
+}
+
+#if defined(PM_ENABLE_PWM)
+/* PB9 is both BOARD_PWM_BUZZER and BOARD_TONE_BUZZER. */
+static bool pwm_uses_gpio(GPIO_TypeDef *port, uint16_t pin)
+{
+    uint8_t i;
+    uint8_t n = (pm_f1_pwm_ctx.count < PM_F1_PWM_COUNT) ? pm_f1_pwm_ctx.count
+                                                        : PM_F1_PWM_COUNT;
+
+    for (i = 0u; i < n; i++) {
+        const pm_f1_pwm_pins_t *pins = &pm_f1_pwm_ctx.pins[i];
+
+        if ((s_pwm[i].opened != 0u) && (pins->port == port) &&
+            (pins->pin == pin)) {
+            return true;
+        }
+    }
+    return false;
+}
+#endif
+
+static void tone_apply(pm_f1_tone_t *s, uint32_t freq_hz, uint16_t permille)
+{
+    uint32_t period = PM_F1_TONE_TICK_HZ / freq_hz;
+
+    if (period == 0u) {
+        period = 1u;
+    }
+    s->period_ticks = (uint16_t)period;      /* <= 1000 for freq >= 100 Hz */
+    s->duty_ticks   = (uint16_t)((period * (uint32_t)permille) / 1000u);
+    s->tick         = 0u;
+
+    __HAL_TIM_SET_AUTORELOAD(&s->htim, period - 1u);
+    s->htim.Instance->EGR = TIM_EGR_UG;      /* load ARR now */
+}
+
+/* Weak HAL hook: only the tone timer is periodic in this port. */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+    uint8_t i;
+
+    for (i = 0u; i < PM_F1_TONE_COUNT; i++) {
+        pm_f1_tone_t *s = &s_tone[i];
+
+        if ((s->active != 0u) && (s->inst == htim->Instance)) {
+            s->tick++;
+            if (s->tick >= s->period_ticks) {
+                s->tick = 0u;
+            }
+            HAL_GPIO_WritePin(s->port, s->pin,
+                              (s->tick < s->duty_ticks) ? GPIO_PIN_SET
+                                                        : GPIO_PIN_RESET);
+        }
+    }
+}
+
+static void tone_irq(TIM_TypeDef *inst)
+{
+    uint8_t i;
+
+    for (i = 0u; i < PM_F1_TONE_COUNT; i++) {
+        if ((s_tone[i].opened != 0u) && (s_tone[i].inst == inst)) {
+            HAL_TIM_IRQHandler(&s_tone[i].htim);
+        }
+    }
+}
+
+void TIM2_IRQHandler(void)
+{
+    tone_irq(TIM2);
+}
+
+void TIM3_IRQHandler(void)
+{
+    tone_irq(TIM3);
+}
+
+void TIM4_IRQHandler(void)
+{
+    tone_irq(TIM4);
+}
+
+static pm_err_t f1_tone_open(void *ctx, pm_tone_t *t, const pm_tone_cfg_t *cfg)
+{
+    const pm_f1_tone_ctx_t  *c = (const pm_f1_tone_ctx_t *)ctx;
+    const pm_f1_tone_pins_t *pins;
+    pm_f1_tone_t            *s;
+    pm_timer_claim_t         claim;
+    uint32_t                 psc;
+    uint32_t                 period;
+    pm_err_t                 rc;
+
+    if ((c == NULL) || (t == NULL) || (cfg == NULL)) {
+        return PM_ERR_NULL;
+    }
+    if ((cfg->hw_id >= PM_F1_TONE_COUNT) || (cfg->hw_id >= c->count)) {
+        return PM_ERR_RANGE;
+    }
+
+    s = &s_tone[cfg->hw_id];
+    if (s->opened != 0u) {
+        return PM_ERR_BUSY;
+    }
+
+    pins = &c->pins[cfg->hw_id];
+    if ((pins->port == NULL) || (pins->pin == 0u) || (pins->inst == NULL)) {
+        return PM_ERR_PARAM;
+    }
+
+#if defined(PM_ENABLE_PWM)
+    if (pwm_uses_gpio(pins->port, pins->pin)) {
+        return PM_ERR_CONFLICT;   /* the hardware PWM owns this pin */
+    }
+#endif
+
+    psc = f1_apb1_timer_clock() / PM_F1_TONE_TICK_HZ;
+    if ((psc == 0u) || (psc > 0x10000u)) {
+        return PM_ERR_PARAM;
+    }
+    psc -= 1u;
+
+    period = PM_F1_TONE_TICK_HZ / cfg->freq_hz;   /* 20 .. 1000 ticks */
+
+    claim.hw_id    = pins->timer_index;
+    claim.owner_id = cfg->hw_id;
+    claim.role     = PM_TIMER_ROLE_TONE;
+    claim.psc      = (uint16_t)psc;
+    claim.arr      = (uint16_t)(period - 1u);
+    claim.channels = 0u;
+
+    rc = pm_timer_claim(&claim);
+    if (rc != PM_OK) {
+        return rc;
+    }
+
+    tone_timer_clk_enable(pins->inst);
+    s->inst        = pins->inst;
+    s->port        = pins->port;
+    s->pin         = pins->pin;
+    s->timer_index = pins->timer_index;
+
+    s->htim.Instance               = pins->inst;
+    s->htim.Init.Prescaler         = psc;
+    s->htim.Init.CounterMode       = TIM_COUNTERMODE_UP;
+    s->htim.Init.Period            = period - 1u;
+    s->htim.Init.ClockDivision     = TIM_CLOCKDIVISION_DIV1;
+    s->htim.Init.RepetitionCounter = 0u;
+    s->htim.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+
+    if (HAL_TIM_Base_Init(&s->htim) != HAL_OK) {
+        (void)pm_timer_release(pins->timer_index, cfg->hw_id);
+        return PM_ERR_IO;
+    }
+    s->opened = 1u;
+
+    gpio_clk_enable(pins->port);
+    {
+        GPIO_InitTypeDef init;
+
+        init.Pin   = pins->pin;
+        init.Mode  = GPIO_MODE_OUTPUT_PP;
+        init.Pull  = GPIO_NOPULL;
+        init.Speed = GPIO_SPEED_FREQ_LOW;
+        HAL_GPIO_Init(pins->port, &init);
+    }
+    HAL_GPIO_WritePin(pins->port, pins->pin, GPIO_PIN_RESET);
+
+    HAL_NVIC_SetPriority(tone_irqn(pins->inst), 2u, 0u);
+    HAL_NVIC_EnableIRQ(tone_irqn(pins->inst));
+
+    tone_apply(s, cfg->freq_hz, cfg->duty_permille);
+    if (HAL_TIM_Base_Start_IT(&s->htim) != HAL_OK) {
+        HAL_NVIC_DisableIRQ(tone_irqn(pins->inst));
+        (void)HAL_TIM_Base_DeInit(&s->htim);
+        (void)pm_timer_release(pins->timer_index, cfg->hw_id);
+        (void)memset(s, 0, sizeof(*s));
+        return PM_ERR_IO;
+    }
+    s->active = 1u;
+    return PM_OK;
+}
+
+static void f1_tone_close(void *ctx, pm_tone_t *t)
+{
+    const pm_f1_tone_ctx_t *c = (const pm_f1_tone_ctx_t *)ctx;
+    pm_f1_tone_t *s;
+
+    if ((c == NULL) || (t == NULL) || (t->hw_id >= PM_F1_TONE_COUNT) ||
+        (t->hw_id >= c->count)) {
+        return;
+    }
+    s = &s_tone[t->hw_id];
+    if (s->opened == 0u) {
+        return;
+    }
+
+    (void)HAL_TIM_Base_Stop_IT(&s->htim);
+    HAL_NVIC_DisableIRQ(tone_irqn(s->inst));
+    HAL_GPIO_WritePin(s->port, s->pin, GPIO_PIN_RESET);
+    (void)HAL_TIM_Base_DeInit(&s->htim);
+    (void)pm_timer_release(s->timer_index, t->hw_id);
+    (void)memset(s, 0, sizeof(*s));
+}
+
+static pm_err_t f1_tone_set(void *ctx, pm_tone_t *t, uint32_t freq_hz,
+                            uint16_t duty_permille)
+{
+    const pm_f1_tone_ctx_t *c = (const pm_f1_tone_ctx_t *)ctx;
+    pm_f1_tone_t *s;
+
+    if ((c == NULL) || (t == NULL) || (t->hw_id >= PM_F1_TONE_COUNT) ||
+        (t->hw_id >= c->count)) {
+        return PM_ERR_NULL;
+    }
+    s = &s_tone[t->hw_id];
+    if (s->opened == 0u) {
+        return PM_ERR_STATE;
+    }
+
+    tone_apply(s, freq_hz, duty_permille);
+    if (s->active == 0u) {
+        if (HAL_TIM_Base_Start_IT(&s->htim) != HAL_OK) {
+            return PM_ERR_IO;
+        }
+        s->active = 1u;
+    }
+    return PM_OK;
+}
+
+static pm_err_t f1_tone_off(void *ctx, pm_tone_t *t)
+{
+    const pm_f1_tone_ctx_t *c = (const pm_f1_tone_ctx_t *)ctx;
+    pm_f1_tone_t *s;
+
+    if ((c == NULL) || (t == NULL) || (t->hw_id >= PM_F1_TONE_COUNT) ||
+        (t->hw_id >= c->count)) {
+        return PM_ERR_NULL;
+    }
+    s = &s_tone[t->hw_id];
+    if (s->opened == 0u) {
+        return PM_ERR_STATE;
+    }
+
+    (void)HAL_TIM_Base_Stop_IT(&s->htim);
+    HAL_GPIO_WritePin(s->port, s->pin, GPIO_PIN_RESET);
+    s->active = 0u;
+    s->tick   = 0u;
+    return PM_OK;
+}
+
+static const pm_tone_ops_t s_tone_ops = {
+    .open  = f1_tone_open,
+    .close = f1_tone_close,
+    .set   = f1_tone_set,
+    .off   = f1_tone_off,
+};
+
+#endif /* PM_ENABLE_TONE */
+
+#if defined(PM_ENABLE_TRACK)
+/* ----------------------------------------------------------------- TRACK */
+
+#define PM_F1_TRACK_COUNT 1u
+
+typedef struct {
+    uint8_t opened;
+} pm_f1_track_t;
+
+static pm_f1_track_t s_track[PM_F1_TRACK_COUNT];
+
+static bool track_uses_spi(uint8_t spi_id)
+{
+    uint8_t i;
+    uint8_t n = (pm_f1_track_ctx.count < PM_F1_TRACK_COUNT)
+                    ? pm_f1_track_ctx.count
+                    : PM_F1_TRACK_COUNT;
+
+    for (i = 0u; i < n; i++) {
+        if ((s_track[i].opened != 0u) &&
+            (pm_f1_track_ctx.pins[i].spi_hw_id == spi_id)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static pm_err_t f1_track_open(void *ctx, pm_track_t *t,
+                              const pm_track_cfg_t *cfg)
+{
+    const pm_f1_track_ctx_t  *c = (const pm_f1_track_ctx_t *)ctx;
+    const pm_f1_track_pins_t *pins;
+    GPIO_InitTypeDef          init;
+
+    if ((c == NULL) || (t == NULL) || (cfg == NULL)) {
+        return PM_ERR_NULL;
+    }
+    if ((cfg->hw_id >= PM_F1_TRACK_COUNT) || (cfg->hw_id >= c->count)) {
+        return PM_ERR_RANGE;
+    }
+    if (s_track[cfg->hw_id].opened != 0u) {
+        return PM_ERR_BUSY;
+    }
+
+    pins = &c->pins[cfg->hw_id];
+    if ((pins->port == NULL) || (pins->pin == 0u)) {
+        return PM_ERR_PARAM;
+    }
+#if defined(PM_ENABLE_SPI)
+    if ((pins->spi_hw_id < PM_F1_SPI_COUNT) &&
+        (s_spi[pins->spi_hw_id].opened != 0u)) {
+        return PM_ERR_CONFLICT;   /* PB14 is SPI2_MISO */
+    }
+#endif
+
+    gpio_clk_enable(pins->port);
+    init.Pin   = pins->pin;
+    init.Mode  = GPIO_MODE_INPUT;
+    init.Pull  = GPIO_PULLUP;     /* the sensor is open-drain / open-collector */
+    init.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(pins->port, &init);
+
+    s_track[cfg->hw_id].opened = 1u;
+    return PM_OK;
+}
+
+static void f1_track_close(void *ctx, pm_track_t *t)
+{
+    const pm_f1_track_ctx_t *c = (const pm_f1_track_ctx_t *)ctx;
+
+    if ((c == NULL) || (t == NULL) || (t->hw_id >= PM_F1_TRACK_COUNT) ||
+        (t->hw_id >= c->count)) {
+        return;
+    }
+    if (s_track[t->hw_id].opened == 0u) {
+        return;
+    }
+
+    HAL_GPIO_DeInit(c->pins[t->hw_id].port, c->pins[t->hw_id].pin);
+    s_track[t->hw_id].opened = 0u;
+}
+
+static pm_err_t f1_track_read(void *ctx, pm_track_t *t, bool *high)
+{
+    const pm_f1_track_ctx_t  *c = (const pm_f1_track_ctx_t *)ctx;
+    const pm_f1_track_pins_t *pins;
+
+    if ((c == NULL) || (t == NULL) || (high == NULL)) {
+        return PM_ERR_NULL;
+    }
+    if ((t->hw_id >= PM_F1_TRACK_COUNT) || (t->hw_id >= c->count)) {
+        return PM_ERR_NULL;
+    }
+    if (s_track[t->hw_id].opened == 0u) {
+        return PM_ERR_STATE;
+    }
+
+    pins  = &c->pins[t->hw_id];
+    *high = (HAL_GPIO_ReadPin(pins->port, pins->pin) == GPIO_PIN_SET);
+    return PM_OK;
+}
+
+static const pm_track_ops_t s_track_ops = {
+    .open  = f1_track_open,
+    .close = f1_track_close,
+    .read  = f1_track_read,
+};
+
+#endif /* PM_ENABLE_TRACK */
+
+#if defined(PM_ENABLE_ENCODER)
+/* --------------------------------------------------------------- ENCODER */
+
+#define PM_F1_ENCODER_COUNT 1u
+
+typedef struct {
+    uint8_t       opened;
+    pm_encoder_t *owner;
+} pm_f1_encoder_t;
+
+static pm_f1_encoder_t s_encoder[PM_F1_ENCODER_COUNT];
+
+static uint8_t encoder_read_ab(const pm_f1_encoder_pins_t *pins)
+{
+    uint8_t a = (HAL_GPIO_ReadPin(pins->a_port, pins->a_pin) == GPIO_PIN_SET)
+                    ? 1u : 0u;
+    uint8_t b = (HAL_GPIO_ReadPin(pins->b_port, pins->b_pin) == GPIO_PIN_SET)
+                    ? 1u : 0u;
+
+    return (uint8_t)((a << 1) | b);
+}
+
+static pm_err_t f1_encoder_open(void *ctx, pm_encoder_t *e,
+                                const pm_encoder_cfg_t *cfg,
+                                uint8_t *initial_ab)
+{
+    const pm_f1_encoder_ctx_t  *c = (const pm_f1_encoder_ctx_t *)ctx;
+    const pm_f1_encoder_pins_t *pins;
+    GPIO_InitTypeDef            init;
+
+    if ((c == NULL) || (e == NULL) || (cfg == NULL) || (initial_ab == NULL)) {
+        return PM_ERR_NULL;
+    }
+    if ((cfg->hw_id >= PM_F1_ENCODER_COUNT) || (cfg->hw_id >= c->count)) {
+        return PM_ERR_RANGE;
+    }
+    if (s_encoder[cfg->hw_id].opened != 0u) {
+        return PM_ERR_BUSY;
+    }
+
+    pins = &c->pins[cfg->hw_id];
+    if ((pins->a_port == NULL) || (pins->a_pin == 0u) ||
+        (pins->b_port == NULL) || (pins->b_pin == 0u)) {
+        return PM_ERR_PARAM;
+    }
+
+    gpio_clk_enable(pins->a_port);
+    gpio_clk_enable(pins->b_port);
+    init.Mode  = GPIO_MODE_IT_RISING_FALLING;
+    init.Pull  = GPIO_PULLUP;     /* open-collector encoder */
+    init.Speed = GPIO_SPEED_FREQ_LOW;
+    init.Pin   = pins->a_pin;
+    HAL_GPIO_Init(pins->a_port, &init);
+    init.Pin   = pins->b_pin;
+    HAL_GPIO_Init(pins->b_port, &init);
+
+    /* Drop any stale pending bit before the interrupt is enabled. */
+    EXTI->PR = (uint32_t)(pins->a_pin | pins->b_pin);
+    HAL_NVIC_SetPriority(pins->irqn, 2u, 0u);
+    HAL_NVIC_EnableIRQ(pins->irqn);
+
+    s_encoder[cfg->hw_id].owner  = e;
+    s_encoder[cfg->hw_id].opened = 1u;
+
+    *initial_ab = encoder_read_ab(pins);
+    return PM_OK;
+}
+
+static void f1_encoder_close(void *ctx, pm_encoder_t *e)
+{
+    const pm_f1_encoder_ctx_t *c = (const pm_f1_encoder_ctx_t *)ctx;
+
+    if ((c == NULL) || (e == NULL) || (e->hw_id >= PM_F1_ENCODER_COUNT) ||
+        (e->hw_id >= c->count)) {
+        return;
+    }
+    if (s_encoder[e->hw_id].opened == 0u) {
+        return;
+    }
+
+    HAL_NVIC_DisableIRQ(c->pins[e->hw_id].irqn);
+    HAL_GPIO_DeInit(c->pins[e->hw_id].a_port, c->pins[e->hw_id].a_pin);
+    HAL_GPIO_DeInit(c->pins[e->hw_id].b_port, c->pins[e->hw_id].b_pin);
+
+    s_encoder[e->hw_id].owner  = NULL;
+    s_encoder[e->hw_id].opened = 0u;
+}
+
+/* PA8/PA9 share EXTI9_5. Both edges of both pins call the core hook. */
+void EXTI9_5_IRQHandler(void)
+{
+    uint8_t i;
+
+    for (i = 0u; i < PM_F1_ENCODER_COUNT; i++) {
+        pm_f1_encoder_t            *s = &s_encoder[i];
+        const pm_f1_encoder_pins_t *pins;
+
+        if ((s->opened == 0u) || (s->owner == NULL)) {
+            continue;
+        }
+        pins = &pm_f1_encoder_ctx.pins[i];
+        if ((EXTI->PR & (uint32_t)(pins->a_pin | pins->b_pin)) == 0u) {
+            continue;
+        }
+        EXTI->PR = (uint32_t)(pins->a_pin | pins->b_pin);   /* write 1 to clear */
+        pm_encoder_hw_edge(s->owner, encoder_read_ab(pins));
+    }
+}
+
+static const pm_encoder_ops_t s_encoder_ops = {
+    .open  = f1_encoder_open,
+    .close = f1_encoder_close,
+};
+
+#endif /* PM_ENABLE_ENCODER */
+
 /* ---------------------------------------------------------- port registry */
 
 static const pm_port_t s_port = {
@@ -1798,6 +2385,21 @@ static const pm_port_t s_port = {
     .pwm            = &s_pwm_ops,
     .pwm_ctx        = (void *)&pm_f1_pwm_ctx,
     .pwm_count      = (uint8_t)PM_F1_PWM_COUNT,
+#endif
+#if defined(PM_ENABLE_TONE)
+    .tone           = &s_tone_ops,
+    .tone_ctx       = (void *)&pm_f1_tone_ctx,
+    .tone_count     = (uint8_t)PM_F1_TONE_COUNT,
+#endif
+#if defined(PM_ENABLE_TRACK)
+    .track          = &s_track_ops,
+    .track_ctx      = (void *)&pm_f1_track_ctx,
+    .track_count    = (uint8_t)PM_F1_TRACK_COUNT,
+#endif
+#if defined(PM_ENABLE_ENCODER)
+    .encoder        = &s_encoder_ops,
+    .encoder_ctx    = (void *)&pm_f1_encoder_ctx,
+    .encoder_count  = (uint8_t)PM_F1_ENCODER_COUNT,
 #endif
 };
 

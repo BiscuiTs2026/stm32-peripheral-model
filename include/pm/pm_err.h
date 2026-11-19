@@ -21,7 +21,12 @@ typedef enum {
     PM_ERR_STATE    = -7,  /* call is invalid in the current lifecycle state */
     PM_ERR_NOMEM    = -8,  /* a fixed pool / buffer is exhausted */
     PM_ERR_AGAIN    = -9,  /* non-blocking call could not make progress now */
-    PM_ERR_OVERFLOW = -10  /* data was dropped because a queue was full */
+    PM_ERR_OVERFLOW = -10, /* data was dropped because a queue was full */
+    PM_ERR_CONFLICT = -11, /* a shared resource (timer, pin) is claimed with an
+                            * incompatible configuration; retrying cannot help */
+    PM_ERR_DISABLED = -12  /* the feature is intentionally switched off at
+                            * runtime; the caller must report the reason, never
+                            * silently treat it as working */
 } pm_err_t;
 
 /* Stable, human-readable name; never returns NULL. */

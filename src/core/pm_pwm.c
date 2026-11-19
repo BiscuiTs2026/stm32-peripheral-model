@@ -187,3 +187,4 @@ uint16_t pm_pwm_duty_permille(const pm_pwm_t *p)
     }
     return p->duty_permille;
 }
+

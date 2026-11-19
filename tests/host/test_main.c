@@ -24,6 +24,16 @@
 #if defined(PM_ENABLE_PWM)
 #include "pm_pwm.h"
 #endif
+#if defined(PM_ENABLE_TONE)
+#include "pm_tone.h"
+#endif
+#if defined(PM_ENABLE_TRACK)
+#include "pm_track.h"
+#endif
+#if defined(PM_ENABLE_ENCODER)
+#include "pm_encoder.h"
+#endif
+#include "pm_timer.h"
 #include "pm_port_mock.h"
 
 void host_time_advance(uint32_t ms);
@@ -1066,7 +1076,318 @@ static void test_pwm_ops(void)
     CHECK(pm_pwm_deinit(&s_pwm) == PM_OK);
 }
 
+static void test_pwm_math(void)
+{
+    pm_pwm_timing_t t;
+
+    CHECK(pm_pwm_timing_compute(72000000u, 1000u, NULL) == PM_ERR_NULL);
+    CHECK(pm_pwm_timing_compute(0u, 1000u, &t) == PM_ERR_PARAM);
+    CHECK(pm_pwm_timing_compute(72000000u, 0u, &t) == PM_ERR_PARAM);
+
+    /* 50 Hz on 72 MHz: PSC 21 / ARR 65453, i.e. 22 * 65454 ticks. */
+    CHECK(pm_pwm_timing_compute(72000000u, 50u, &t) == PM_OK);
+    CHECK(t.psc == 21u);
+    CHECK(t.arr == 65453u);
+    CHECK(t.actual_hz == 50u);
+
+    CHECK(pm_pwm_timing_compute(72000000u, 2000u, &t) == PM_OK);
+    CHECK(t.psc == 0u);
+    CHECK(t.arr == 35999u);
+    CHECK(t.actual_hz == 2000u);
+
+    CHECK(pm_pwm_timing_compute(72000000u, 1000000u, &t) == PM_OK);
+    CHECK(t.psc == 0u);
+    CHECK(t.arr == 71u);
+
+    /* 100 Hz clock cannot produce 1 kHz: the self-check must refuse. */
+    CHECK(pm_pwm_timing_compute(100u, 1000u, &t) == PM_ERR_PARAM);
+
+    /* The board bug: PSC 0 + the servo ARR 19999 is 3.6 kHz, not 50 Hz.
+       PSC 71 + ARR 19999 is the verified 50 Hz servo frame. */
+    CHECK(pm_pwm_timing_matches(72000000u, 0u, 19999u, 50u, 10u) == false);
+    CHECK(pm_pwm_timing_matches(72000000u, 71u, 19999u, 50u, 10u) == true);
+    CHECK(pm_pwm_timing_matches(72000000u, 0u, 19999u, 3600u, 10u) == true);
+
+    CHECK(pm_pwm_compare_count(19999u, 75u) == 1500u);
+    CHECK(pm_pwm_compare_count(19999u, 0u) == 0u);
+    CHECK(pm_pwm_compare_count(19999u, 1000u) == 20000u);
+    CHECK(pm_pwm_compare_count(65535u, 1000u) == 65535u);
+}
+
 #endif /* PM_ENABLE_PWM */
+
+/* ------------------------------------------------------- timer arbitration */
+
+static void test_timer_arbiter(void)
+{
+    pm_timer_claim_t pwm0;
+    pm_timer_claim_t pwm1;
+    pm_timer_claim_t other;
+
+    pm_timer_reset();
+    CHECK(pm_timer_claims(0u) == 0u);
+
+    pwm0.hw_id    = 0u;
+    pwm0.owner_id = 0u;
+    pwm0.role     = PM_TIMER_ROLE_PWM;
+    pwm0.psc      = 21u;
+    pwm0.arr      = 65453u;
+    pwm0.channels = 0x01u;
+
+    CHECK(pm_timer_check(&pwm0) == PM_OK);
+    CHECK(pm_timer_claim(&pwm0) == PM_OK);
+    CHECK(pm_timer_claims(0u) == 1u);
+    CHECK(pm_timer_claim(&pwm0) == PM_OK);          /* identical re-claim */
+    CHECK(pm_timer_claims(0u) == 1u);
+
+    /* Same period, different channel: allowed. */
+    pwm1 = pwm0;
+    pwm1.owner_id = 1u;
+    pwm1.channels = 0x02u;
+    CHECK(pm_timer_claim(&pwm1) == PM_OK);
+    CHECK(pm_timer_claims(0u) == 2u);
+
+    /* Same channel: conflict. */
+    other = pwm1;
+    other.channels = 0x01u;
+    CHECK(pm_timer_claim(&other) == PM_ERR_CONFLICT);
+
+    /* Same channel set, different ARR: conflict. */
+    other = pwm1;
+    other.channels = 0x04u;
+    other.arr = 35999u;
+    CHECK(pm_timer_claim(&other) == PM_ERR_CONFLICT);
+
+    /* A tone on a timer that already carries PWM: conflict. */
+    other = pwm1;
+    other.owner_id = 7u;
+    other.role = PM_TIMER_ROLE_TONE;
+    other.channels = 0u;
+    CHECK(pm_timer_claim(&other) == PM_ERR_CONFLICT);
+
+    /* Free-running counter on another timer. */
+    other.hw_id = 1u;
+    other.owner_id = 5u;
+    other.role = PM_TIMER_ROLE_COUNTER;
+    other.psc = 0u;
+    other.arr = PM_TIMER_ARR_FULL;
+    other.channels = 0u;
+    CHECK(pm_timer_claim(&other) == PM_OK);
+
+    /* Counter with a partial ARR is not a counter. */
+    {
+        pm_timer_claim_t bad = other;
+
+        bad.arr = 19999u;
+        CHECK(pm_timer_claim(&bad) == PM_ERR_PARAM);
+    }
+
+    /* PWM cannot take a timer that is a free-running counter: this is the
+       TIM2 echo/PWM collision from the board. */
+    {
+        pm_timer_claim_t pwmbad = pwm0;
+
+        pwmbad.hw_id = 1u;
+        pwmbad.owner_id = 6u;
+        CHECK(pm_timer_claim(&pwmbad) == PM_ERR_CONFLICT);
+    }
+
+    /* Retiming updates every PWM claim on that timer. */
+    CHECK(pm_timer_retime(0u, 1u, 31u, 64499u) == PM_OK);
+    CHECK(pm_timer_retime(0u, 9u, 31u, 64499u) == PM_ERR_STATE);
+
+    /* Release removes only that owner. */
+    CHECK(pm_timer_release(0u, 0u) == PM_OK);
+    CHECK(pm_timer_claims(0u) == 1u);
+    CHECK(pm_timer_release(0u, 0u) == PM_ERR_STATE);
+
+    /* Table capacity: 8 entries, the ninth distinct timer is refused. */
+    pm_timer_reset();
+    {
+        uint8_t i;
+        pm_timer_claim_t c;
+
+        c.role     = PM_TIMER_ROLE_TONE;
+        c.psc      = 719u;
+        c.arr      = 49u;
+        c.channels = 0u;
+        for (i = 0u; i < PM_TIMER_CLAIM_MAX; i++) {
+            c.hw_id = i;
+            c.owner_id = 0u;
+            CHECK(pm_timer_claim(&c) == PM_OK);
+        }
+        c.hw_id = 0u;
+        c.owner_id = 1u;
+        CHECK(pm_timer_claim(&c) == PM_ERR_CONFLICT);   /* timer taken */
+        c.hw_id = 0u;
+        c.role = PM_TIMER_ROLE_PWM;
+        c.channels = 0x01u;
+        c.psc = 0u;
+        c.arr = 99u;
+        CHECK(pm_timer_claim(&c) == PM_ERR_CONFLICT);
+    }
+    pm_timer_reset();
+}
+
+#if defined(PM_ENABLE_TONE)
+static void test_tone(void)
+{
+    pm_tone_t t;
+    pm_tone_cfg_t cfg;
+
+    mock_reset();
+    memset(&t, 0, sizeof(t));
+
+    cfg.hw_id = 0u;
+    cfg.freq_hz = 2000u;
+    cfg.duty_permille = 50u;
+
+    CHECK(pm_tone_init(NULL, &cfg) == PM_ERR_NULL);
+    CHECK(pm_tone_init(&t, NULL) == PM_ERR_NULL);
+
+    cfg.freq_hz = PM_TONE_FREQ_MIN - 1u;
+    CHECK(pm_tone_init(&t, &cfg) == PM_ERR_PARAM);
+    cfg.freq_hz = PM_TONE_FREQ_MAX + 1u;
+    CHECK(pm_tone_init(&t, &cfg) == PM_ERR_PARAM);
+    cfg.freq_hz = 2000u;
+    cfg.duty_permille = 0u;
+    CHECK(pm_tone_init(&t, &cfg) == PM_ERR_PARAM);
+    cfg.duty_permille = 1000u;
+    CHECK(pm_tone_init(&t, &cfg) == PM_ERR_PARAM);
+    cfg.duty_permille = 50u;
+    cfg.hw_id = MOCK_TONE_COUNT;
+    CHECK(pm_tone_init(&t, &cfg) == PM_ERR_RANGE);
+
+    cfg.hw_id = 0u;
+    CHECK(pm_tone_init(&t, &cfg) == PM_OK);
+    CHECK(mock_tone_is_open(0u) == 1);
+    CHECK(pm_tone_is_active(&t) == true);
+    CHECK(pm_tone_frequency_hz(&t) == 2000u);
+    CHECK(mock_tone_duty(0u) == 50u);
+    CHECK(pm_tone_init(&t, &cfg) == PM_ERR_BUSY);
+
+    CHECK(pm_tone_set(&t, 1000u, 100u) == PM_OK);
+    CHECK(pm_tone_frequency_hz(&t) == 1000u);
+    CHECK(mock_tone_frequency(0u) == 1000u);
+
+    CHECK(pm_tone_off(&t) == PM_OK);
+    CHECK(pm_tone_is_active(&t) == false);
+    CHECK(mock_tone_is_active(0u) == 0);
+
+    /* set() resumes the tone with the stored-facing values. */
+    CHECK(pm_tone_set(&t, 440u, 500u) == PM_OK);
+    CHECK(pm_tone_is_active(&t) == true);
+
+    CHECK(pm_tone_deinit(&t) == PM_OK);
+    CHECK(mock_tone_is_open(0u) == 0);
+    CHECK(pm_tone_is_active(&t) == false);
+    CHECK(pm_tone_deinit(&t) == PM_OK);
+    CHECK(pm_tone_set(&t, 440u, 500u) == PM_ERR_STATE);
+}
+#endif /* PM_ENABLE_TONE */
+
+#if defined(PM_ENABLE_TRACK)
+static void test_track(void)
+{
+    pm_track_t t;
+    pm_track_cfg_t cfg;
+    bool on_line = false;
+
+    mock_reset();
+    memset(&t, 0, sizeof(t));
+
+    cfg.hw_id = 0u;
+    cfg.active_level = (uint8_t)PM_GPIO_LEVEL_LOW;
+
+    CHECK(pm_track_init(NULL, &cfg) == PM_ERR_NULL);
+    CHECK(pm_track_init(&t, NULL) == PM_ERR_NULL);
+    cfg.active_level = 7u;
+    CHECK(pm_track_init(&t, &cfg) == PM_ERR_PARAM);
+    cfg.active_level = (uint8_t)PM_GPIO_LEVEL_LOW;
+    cfg.hw_id = MOCK_TRACK_COUNT;
+    CHECK(pm_track_init(&t, &cfg) == PM_ERR_RANGE);
+
+    cfg.hw_id = 0u;
+    CHECK(pm_track_init(&t, &cfg) == PM_OK);
+    CHECK(mock_track_is_open(0u) == 1);
+    CHECK(pm_track_init(&t, &cfg) == PM_ERR_BUSY);
+
+    /* Active low: the pin low means "on the line". */
+    mock_track_set_level(0u, PM_GPIO_LEVEL_HIGH);
+    CHECK(pm_track_read_raw(&t, &on_line) == PM_OK);
+    CHECK(on_line == false);
+    mock_track_set_level(0u, PM_GPIO_LEVEL_LOW);
+    CHECK(pm_track_read_raw(&t, &on_line) == PM_OK);
+    CHECK(on_line == true);
+
+    CHECK(pm_track_read_raw(&t, NULL) == PM_ERR_NULL);
+    CHECK(pm_track_deinit(&t) == PM_OK);
+    CHECK(mock_track_is_open(0u) == 0);
+    CHECK(pm_track_deinit(&t) == PM_OK);
+    CHECK(pm_track_read_raw(&t, &on_line) == PM_ERR_STATE);
+}
+#endif /* PM_ENABLE_TRACK */
+
+#if defined(PM_ENABLE_ENCODER)
+static void test_encoder(void)
+{
+    pm_encoder_t e;
+    pm_encoder_cfg_t cfg;
+
+    mock_reset();
+    memset(&e, 0, sizeof(e));
+    cfg.hw_id = 0u;
+    cfg.invert = 0u;
+
+    CHECK(pm_encoder_init(NULL, &cfg) == PM_ERR_NULL);
+    CHECK(pm_encoder_init(&e, NULL) == PM_ERR_NULL);
+    cfg.hw_id = MOCK_ENCODER_COUNT;
+    CHECK(pm_encoder_init(&e, &cfg) == PM_ERR_RANGE);
+    cfg.hw_id = 0u;
+
+    /* Start from a non-zero state to prove the port's initial AB is adopted. */
+    mock_encoder_set_initial_ab(0u, 3u);
+    CHECK(pm_encoder_init(&e, &cfg) == PM_OK);
+    CHECK(pm_encoder_last_ab(&e) == 3u);
+    CHECK(pm_encoder_count(&e) == 0);
+    CHECK(pm_encoder_init(&e, &cfg) == PM_ERR_BUSY);
+
+    /* 11 -> 10 -> 00 -> 01 -> 11 is forward: +4. */
+    pm_encoder_hw_edge(&e, 2u);
+    pm_encoder_hw_edge(&e, 0u);
+    pm_encoder_hw_edge(&e, 1u);
+    pm_encoder_hw_edge(&e, 3u);
+    CHECK(pm_encoder_count(&e) == 4);
+
+    /* Reverse: 11 -> 01 -> 00 -> 10 -> 11 is -4. */
+    pm_encoder_hw_edge(&e, 1u);
+    pm_encoder_hw_edge(&e, 0u);
+    pm_encoder_hw_edge(&e, 2u);
+    pm_encoder_hw_edge(&e, 3u);
+    CHECK(pm_encoder_count(&e) == 0);
+
+    /* Diagonal jump (missed edge) does not count. */
+    pm_encoder_hw_edge(&e, 0u);
+    CHECK(pm_encoder_count(&e) == 0);
+    CHECK(pm_encoder_last_ab(&e) == 0u);
+
+    CHECK(pm_encoder_reset(&e) == PM_OK);
+    CHECK(pm_encoder_count(&e) == 0);
+
+    /* invert swaps A and B: AB 01 is decoded as 10, which is -1 from 00. */
+    CHECK(pm_encoder_deinit(&e) == PM_OK);
+    cfg.invert = 1u;
+    mock_encoder_set_initial_ab(0u, 0u);
+    CHECK(pm_encoder_init(&e, &cfg) == PM_OK);
+    pm_encoder_hw_edge(&e, 1u);
+    CHECK(pm_encoder_count(&e) == -1);
+    CHECK(pm_encoder_last_ab(&e) == 2u);
+
+    CHECK(pm_encoder_deinit(&e) == PM_OK);
+    CHECK(pm_encoder_count(&e) == 0);
+    CHECK(pm_encoder_reset(&e) == PM_ERR_STATE);
+}
+#endif /* PM_ENABLE_ENCODER */
 
 int main(void)
 {
@@ -1101,6 +1422,17 @@ int main(void)
 #if defined(PM_ENABLE_PWM)
     test_pwm_validation();
     test_pwm_ops();
+    test_pwm_math();
+#endif
+    test_timer_arbiter();
+#if defined(PM_ENABLE_TONE)
+    test_tone();
+#endif
+#if defined(PM_ENABLE_TRACK)
+    test_track();
+#endif
+#if defined(PM_ENABLE_ENCODER)
+    test_encoder();
 #endif
 
     printf("\n%d checks, %d failure(s)\n", s_checks, s_failures);
