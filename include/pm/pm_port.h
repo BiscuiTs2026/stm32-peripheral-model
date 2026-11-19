@@ -163,13 +163,33 @@ typedef struct {
     uint32_t clock_hz;   /* requested SCL rate; the port clamps/rounds */
 } pm_i2c_cfg_t;
 
+/* Normalized I2C error bits carried in pm_i2c_stats_t.last_error and passed to
+ * pm_i2c_hw_error(). The port maps its vendor error code into this set so the
+ * core can classify without any vendor header. The values deliberately match
+ * the STM32F1 HAL I2C error code layout, which lets the F1 port pass
+ * hi2c->ErrorCode unchanged; other ports must translate.
+ *   AF      : the addressed device did not acknowledge (absent / wrong address)
+ *   BERR    : misplaced START or STOP
+ *   ARLO    : lost arbitration (another master on the bus)
+ *   OVR     : overrun, a byte was dropped
+ *   TIMEOUT : the peripheral raised its own timeout
+ *   LOCAL   : port-detected failure, no peripheral error code (e.g. no ACK
+ *             polling timeout); contract 12.4 */
+#define PM_I2C_EERR_BERR    0x0001u
+#define PM_I2C_EERR_ARLO    0x0002u
+#define PM_I2C_EERR_AF      0x0004u
+#define PM_I2C_EERR_OVR     0x0008u
+#define PM_I2C_EERR_DMA     0x0010u
+#define PM_I2C_EERR_TIMEOUT 0x0020u
+#define PM_I2C_EERR_LOCAL   0x8000u
+
 typedef struct {
     uint32_t tx_bytes;    /* bytes shifted out (including register addresses) */
     uint32_t rx_bytes;    /* bytes shifted in */
     uint32_t transfers;   /* transfers completed without error */
     uint32_t aborted;     /* transfers stopped because the deadline expired */
     uint32_t errors;      /* hardware error events, NACK included */
-    uint16_t last_error;  /* backend-specific error mask, 0 if none */
+    uint16_t last_error;  /* PM_I2C_EERR_* mask, 0 if none */
 } pm_i2c_stats_t;
 
 typedef struct pm_i2c pm_i2c_t;

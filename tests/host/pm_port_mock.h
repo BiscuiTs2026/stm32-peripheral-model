@@ -48,6 +48,7 @@ size_t          mock_i2c_capture_len(uint8_t hw_id);
 const uint8_t  *mock_i2c_capture(uint8_t hw_id);
 void            mock_i2c_set_auto_complete(uint8_t hw_id, int on);
 void            mock_i2c_set_fail(uint8_t hw_id, int on);
+void            mock_i2c_set_fail_mask(uint8_t hw_id, uint16_t mask);
 void            mock_i2c_set_progress(uint8_t hw_id, uint16_t bytes);
 void            mock_i2c_complete(uint8_t hw_id);
 

@@ -806,7 +806,60 @@ static void test_i2c_error(void)
     CHECK(pm_i2c_write(&s_i2c, I2C_TEST_ADDR, s_i2c_wr, 2u, &done, 100u) == PM_OK);
     CHECK(done == 2u);
 
+    /* Optional classification: off by default, nothing moves. */
+    {
+        pm_i2c_err_counts_t ec;
+
+        CHECK(pm_i2c_set_error_counting(NULL, true) == PM_ERR_NULL);
+        CHECK(pm_i2c_get_error_counts(NULL, &ec) == PM_ERR_NULL);
+        CHECK(pm_i2c_get_error_counts(&s_i2c, &ec) == PM_OK);
+        CHECK((ec.af | ec.berr | ec.arlo | ec.ovr | ec.timeout | ec.other) == 0u);
+
+        mock_i2c_set_auto_complete(1u, 0);
+        mock_i2c_set_fail(1u, 1);
+        mock_i2c_set_fail_mask(1u, PM_I2C_EERR_AF);
+        CHECK(pm_i2c_write(&s_i2c, I2C_TEST_ADDR, s_i2c_wr, 4u, &done, 100u) ==
+              PM_ERR_IO);                        /* disabled: historical code */
+        CHECK(pm_i2c_get_error_counts(&s_i2c, &ec) == PM_OK);
+        CHECK(ec.af == 0u);                      /* disabled: no counting */
+
+        /* Enabled: AF -> NACK, BERR/ARLO/LOCAL -> BUS, timeout counted. */
+        CHECK(pm_i2c_set_error_counting(&s_i2c, true) == PM_OK);
+        CHECK(pm_i2c_write(&s_i2c, I2C_TEST_ADDR, s_i2c_wr, 4u, &done, 100u) ==
+              PM_ERR_NACK);
+        mock_i2c_set_fail_mask(1u, PM_I2C_EERR_BERR);
+        CHECK(pm_i2c_write(&s_i2c, I2C_TEST_ADDR, s_i2c_wr, 4u, &done, 100u) ==
+              PM_ERR_BUS);
+        mock_i2c_set_fail_mask(1u, PM_I2C_EERR_ARLO);
+        CHECK(pm_i2c_write(&s_i2c, I2C_TEST_ADDR, s_i2c_wr, 4u, &done, 100u) ==
+              PM_ERR_BUS);
+        mock_i2c_set_fail_mask(1u, PM_I2C_EERR_LOCAL);
+        CHECK(pm_i2c_write(&s_i2c, I2C_TEST_ADDR, s_i2c_wr, 4u, &done, 100u) ==
+              PM_ERR_BUS);
+        CHECK(pm_i2c_get_error_counts(&s_i2c, &ec) == PM_OK);
+        CHECK(ec.af == 1u);
+        CHECK(ec.berr == 1u);
+        CHECK(ec.arlo == 1u);
+        CHECK(ec.other == 1u);
+
+        /* Deadline expiry counts as a timeout and keeps PM_ERR_TIMEOUT. */
+        mock_i2c_set_fail(1u, 0);
+        CHECK(pm_i2c_write(&s_i2c, I2C_TEST_ADDR, s_i2c_wr, 8u, &done, 5u) ==
+              PM_ERR_TIMEOUT);
+        CHECK(pm_i2c_get_error_counts(&s_i2c, &ec) == PM_OK);
+        CHECK(ec.timeout == 1u);
+
+        mock_i2c_set_auto_complete(1u, 1);
+        CHECK(pm_i2c_set_error_counting(&s_i2c, false) == PM_OK);
+    }
+
     CHECK(pm_i2c_deinit(&s_i2c) == PM_OK);
+    {
+        pm_i2c_err_counts_t ec;
+
+        CHECK(pm_i2c_get_error_counts(&s_i2c, &ec) == PM_ERR_STATE);
+        CHECK(pm_i2c_set_error_counting(&s_i2c, true) == PM_ERR_STATE);
+    }
 }
 
 #endif /* PM_ENABLE_I2C */

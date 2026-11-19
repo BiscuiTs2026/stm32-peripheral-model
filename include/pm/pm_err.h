@@ -24,9 +24,13 @@ typedef enum {
     PM_ERR_OVERFLOW = -10, /* data was dropped because a queue was full */
     PM_ERR_CONFLICT = -11, /* a shared resource (timer, pin) is claimed with an
                             * incompatible configuration; retrying cannot help */
-    PM_ERR_DISABLED = -12  /* the feature is intentionally switched off at
+    PM_ERR_DISABLED = -12, /* the feature is intentionally switched off at
                             * runtime; the caller must report the reason, never
                             * silently treat it as working */
+    PM_ERR_NACK     = -13, /* addressed device did not acknowledge (I2C AF);
+                            * the device is absent or addressed wrongly */
+    PM_ERR_BUS      = -14  /* bus-level fault: misplaced START/STOP, lost
+                            * arbitration or overrun; the wiring is suspect */
 } pm_err_t;
 
 /* Stable, human-readable name; never returns NULL. */

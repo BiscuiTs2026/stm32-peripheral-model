@@ -23,6 +23,58 @@ static bool cfg_valid(const pm_i2c_cfg_t *cfg)
            (cfg->clock_hz <= PM_I2C_CLOCK_MAX);
 }
 
+/* Optional classification. Priority follows severity of diagnosis: a NACK
+ * means the device answered nothing, which the caller fixes by checking the
+ * address; a bus error means the wiring is suspect. */
+static pm_i2c_err_class_t classify(uint16_t mask)
+{
+    if ((mask & PM_I2C_EERR_AF) != 0u) {
+        return PM_I2C_ERRCLASS_AF;
+    }
+    if ((mask & PM_I2C_EERR_BERR) != 0u) {
+        return PM_I2C_ERRCLASS_BERR;
+    }
+    if ((mask & PM_I2C_EERR_ARLO) != 0u) {
+        return PM_I2C_ERRCLASS_ARLO;
+    }
+    if ((mask & PM_I2C_EERR_OVR) != 0u) {
+        return PM_I2C_ERRCLASS_OVR;
+    }
+    if ((mask & PM_I2C_EERR_TIMEOUT) != 0u) {
+        return PM_I2C_ERRCLASS_TIMEOUT;
+    }
+    return PM_I2C_ERRCLASS_OTHER;
+}
+
+static void count_class(pm_i2c_t *s, pm_i2c_err_class_t cls)
+{
+    switch (cls) {
+    case PM_I2C_ERRCLASS_AF:      s->err_counts.af++;      break;
+    case PM_I2C_ERRCLASS_BERR:    s->err_counts.berr++;    break;
+    case PM_I2C_ERRCLASS_ARLO:    s->err_counts.arlo++;    break;
+    case PM_I2C_ERRCLASS_OVR:     s->err_counts.ovr++;     break;
+    case PM_I2C_ERRCLASS_TIMEOUT: s->err_counts.timeout++; break;
+    default:                      s->err_counts.other++;   break;
+    }
+}
+
+/* Return code for a failed transfer. Unclassified mode is the historical
+ * PM_ERR_IO; classified mode names the fault so the caller can act on it. */
+static pm_err_t fail_code(const pm_i2c_t *s)
+{
+    if (s->count_errors == 0u) {
+        return PM_ERR_IO;
+    }
+    switch (s->last_class) {
+    case PM_I2C_ERRCLASS_AF:
+        return PM_ERR_NACK;
+    case PM_I2C_ERRCLASS_TIMEOUT:
+        return PM_ERR_TIMEOUT;
+    default:
+        return PM_ERR_BUS;
+    }
+}
+
 static pm_err_t begin_transaction(pm_i2c_t *s)
 {
     pm_irq_state_t irq = pm_osal_critical_enter();
@@ -34,6 +86,7 @@ static pm_err_t begin_transaction(pm_i2c_t *s)
         s->active     = 1u;
         s->last_done  = 0u;
         s->last_error = 0u;
+        s->last_class = PM_I2C_ERRCLASS_NONE;
     }
 
     pm_osal_critical_exit(irq);
@@ -74,7 +127,7 @@ static pm_err_t wait_complete(pm_i2c_t *s, uint16_t expected, size_t *done,
                 *done = got;
             }
             if (failed != 0u) {
-                return PM_ERR_IO;
+                return fail_code(s);
             }
             return (got == expected) ? PM_OK : PM_ERR_IO;
         }
@@ -105,10 +158,14 @@ static pm_err_t wait_complete(pm_i2c_t *s, uint16_t expected, size_t *done,
                 if (done != NULL) {
                     *done = got;
                 }
-                return (failed != 0u) ? PM_ERR_IO : PM_OK;
+                return (failed != 0u) ? fail_code(s) : PM_OK;
             }
             if (done != NULL) {
                 *done = stopped;
+            }
+            if (s->count_errors != 0u) {
+                s->last_class = PM_I2C_ERRCLASS_TIMEOUT;
+                count_class(s, PM_I2C_ERRCLASS_TIMEOUT);
             }
             return PM_ERR_TIMEOUT;
         }
@@ -326,6 +383,34 @@ pm_err_t pm_i2c_get_stats(const pm_i2c_t *i, pm_i2c_stats_t *out)
     return PM_OK;
 }
 
+pm_err_t pm_i2c_set_error_counting(pm_i2c_t *i, bool on)
+{
+    if (i == NULL) {
+        return PM_ERR_NULL;
+    }
+    if (i->state != PM_I2C_STATE_READY) {
+        return PM_ERR_STATE;
+    }
+    if (on) {
+        (void)memset(&i->err_counts, 0, sizeof(i->err_counts));
+        i->last_class = PM_I2C_ERRCLASS_NONE;
+    }
+    i->count_errors = on ? 1u : 0u;
+    return PM_OK;
+}
+
+pm_err_t pm_i2c_get_error_counts(const pm_i2c_t *i, pm_i2c_err_counts_t *out)
+{
+    if ((i == NULL) || (out == NULL)) {
+        return PM_ERR_NULL;
+    }
+    if (i->state != PM_I2C_STATE_READY) {
+        return PM_ERR_STATE;
+    }
+    *out = i->err_counts;
+    return PM_OK;
+}
+
 uint32_t pm_i2c_clock_hz(const pm_i2c_t *i)
 {
     if ((i == NULL) || (i->state != PM_I2C_STATE_READY)) {
@@ -364,6 +449,13 @@ void pm_i2c_hw_error(pm_i2c_t *i, uint16_t hw_error_mask, uint16_t done)
 
     i->stats.errors++;
     i->stats.last_error = hw_error_mask;
+
+    if (i->count_errors != 0u) {
+        pm_i2c_err_class_t cls = classify(hw_error_mask);
+
+        i->last_class = (uint8_t)cls;
+        count_class(i, cls);
+    }
 
     if (i->active != 0u) {
         i->last_done  = done;

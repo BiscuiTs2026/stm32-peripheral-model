@@ -251,6 +251,9 @@ static const pm_spi_ops_t s_spi_ops = {
 static uint8_t        s_i2c_open[MOCK_I2C_COUNT];
 static uint8_t        s_i2c_auto[MOCK_I2C_COUNT];
 static uint8_t        s_i2c_fail[MOCK_I2C_COUNT];
+static uint16_t       s_i2c_fail_mask[MOCK_I2C_COUNT] = {
+    0x0004u, 0x0004u   /* default injected error: AF / NACK */
+};
 static uint16_t       s_i2c_progress[MOCK_I2C_COUNT];
 static pm_i2c_t      *s_i2c_owner[MOCK_I2C_COUNT];
 static uint8_t        s_i2c_addr[MOCK_I2C_COUNT];
@@ -306,7 +309,7 @@ static pm_err_t mock_i2c_begin(uint8_t id, pm_i2c_t *i, uint8_t addr7,
     }
 
     if (s_i2c_fail[id] != 0u) {
-        pm_i2c_hw_error(i, 0x0004u, s_i2c_progress[id]);   /* AF / NACK */
+        pm_i2c_hw_error(i, s_i2c_fail_mask[id], s_i2c_progress[id]);
     } else if (s_i2c_auto[id] != 0u) {
         mock_i2c_finish(id);
     }
@@ -815,6 +818,13 @@ void mock_reset(void)
     memset(s_i2c_open, 0, sizeof(s_i2c_open));
     memset(s_i2c_auto, 0, sizeof(s_i2c_auto));
     memset(s_i2c_fail, 0, sizeof(s_i2c_fail));
+    {
+        uint8_t n;
+
+        for (n = 0u; n < MOCK_I2C_COUNT; n++) {
+            s_i2c_fail_mask[n] = 0x0004u;   /* back to the AF default */
+        }
+    }
     memset(s_i2c_progress, 0, sizeof(s_i2c_progress));
     memset(s_i2c_owner, 0, sizeof(s_i2c_owner));
     memset(s_i2c_addr, 0, sizeof(s_i2c_addr));
@@ -976,6 +986,13 @@ void mock_i2c_set_fail(uint8_t hw_id, int on)
 {
     if (hw_id < MOCK_I2C_COUNT) {
         s_i2c_fail[hw_id] = (on != 0) ? 1u : 0u;
+    }
+}
+
+void mock_i2c_set_fail_mask(uint8_t hw_id, uint16_t mask)
+{
+    if (hw_id < MOCK_I2C_COUNT) {
+        s_i2c_fail_mask[hw_id] = mask;
     }
 }
 

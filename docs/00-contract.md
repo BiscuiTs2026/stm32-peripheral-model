@@ -430,6 +430,45 @@ init -> (write / read / write_read / poll)* -> deinit
 - I2C2 不暴露：PB10/PB11 在本板上是 USART3 / BLE 接口。
 - 引脚配置为 AF 开漏 + 内部弱上拉；总线仍需要外部上拉（模块板自带），内部上拉只作兜底。
 
+### 12.7 可选错误分类与计数（v0.6 新增）
+
+**问题**：12.1～12.6 里所有硬件失败都返回 `PM_ERR_IO`，调用方只能从
+`stats.last_error` 的原始掩码里翻。设备不在（AF）与接线/总线故障（BERR/ARLO）
+的处理动作完全不同：前者查地址或断电，后者查线与上拉。混在一个错误码里，
+上层只能都当"IO 挂了"。
+
+**取舍**：分类是**可选**能力，默认关闭。理由不是省事，而是既有调用形态
+（以及 18 条告警所覆盖的路径）都按 `PM_ERR_IO` 写好了分支；默认改变返回码
+等于在移植轮之前改动调用方契约。开启后只影响本次调用之后的返回码与计数，
+不改变 `stats` 字段语义、不改变事件 `arg`。
+
+| 判据 | 开启状态 | 返回码 | 计数 |
+| --- | --- | --- | --- |
+| 任意硬件错误掩码 | 关（默认） | `PM_ERR_IO` | 不动 |
+| `AF`（从机不响应） | 开 | `PM_ERR_NACK` | `af++` |
+| `BERR`（START/STOP 错位） | 开 | `PM_ERR_BUS` | `berr++` |
+| `ARLO`（仲裁丢失） | 开 | `PM_ERR_BUS` | `arlo++` |
+| `OVR`（字节被覆盖） | 开 | `PM_ERR_BUS` | `ovr++` |
+| 仅 `LOCAL`/`DMA`/无法识别的位 | 开 | `PM_ERR_BUS` | `other++` |
+| 端口自身的 `TIMEOUT` 位 | 开 | `PM_ERR_BUS` | `other++` |
+| 截止时间到期（模型侧 abort） | 开 | `PM_ERR_TIMEOUT` | `timeout++` |
+| 传输完成但字节数不足 | 开 / 关 | `PM_ERR_IO` | 不动 |
+
+- 归类优先级：`AF` > `BERR` > `ARLO` > `OVR` > `TIMEOUT` > `OTHER`。一个掩码里
+  有多个位时按最可诊断的那个算，不重复计数。
+- `timeout++` 只记模型侧截止时间到期；端口在 `ErrorCode` 里自带 `TIMEOUT` 位时
+  仍归 `other`，因为那是外设报错，不是本次等待超时。
+- `pm_i2c_set_error_counting(i, true)` **先把计数清零**再开启，避免把开启前的
+  历史混进统计；`false` 只关开关，不清计数（读数仍可查看上次结果）。
+- 计数只在 ISR 钩子（`pm_i2c_hw_error`）与超时路径里累加，主循环只读；
+  32 位对齐写在 M3 上原子，读取无需临界区。
+- `pm_i2c_set_error_counting` / `pm_i2c_get_error_counts`：NULL → `PM_ERR_NULL`，
+  未初始化 → `PM_ERR_STATE`。关闭状态下读取合法，返回当前（可能全零）快照。
+- 端口侧不新增回调：`pm_i2c_hw_error(i, mask, done)` 的 `mask` 就是
+  `PM_I2C_EERR_*`（见 12.4），F1 端口原样传 `hi2c->ErrorCode`，手写端口必须翻译。
+- 本节的分类结果**不替代** `stats.last_error` 与事件 `arg`：后两者仍是原始掩码，
+  便于上板对日志。
+
 ---
 
 ## 13. ADC 模型（v0.4 新增）
