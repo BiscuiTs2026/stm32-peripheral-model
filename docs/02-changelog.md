@@ -13,6 +13,41 @@
   因此本期不建存量清单；
 - 首轮全部保持 WARN 级，未把任何规则调成 ERROR；调级需单独立项。
 
+## v0.6（2026-11-19，提交 `8f8b9e9` … `4e0ae8d`，本文档收尾提交另计）
+
+### 新增
+
+- `pm_timer` 外部占用探测：端口通过 `pm_timer_set_probe()` 安装探测，模型在**零 live
+  claim** 时才询问"该定时器是否已被非模型代码启动/重配"，忙则返回 `PM_ERR_CONFLICT`，
+  表与寄存器都不动（契约 §20.7）；解决板端 `pm_motor_stm32f1.c` 只查 `TIM2->CR1.CEN`
+  的裸占用对模型不可见的问题；
+- `pm_encoder` 可选按键：`pm_encoder_cfg_t.has_button` 与可选 `read_button` 端口钩子；
+  未配置时 `init` 仍成功、`pm_encoder_has_button()` 为 false、`pm_encoder_button()`
+  返回 `PM_ERR_DISABLED` 且 `*pressed = false`（契约 §19.6）；
+- `pm_servo` 新模型：给定角度范围与脉宽范围（默认 SG90 0–180° ↔ 500–2500 µs），
+  做角度→脉宽换算并校验越界；单独成章（契约第 24 章），不并入 `pm_pwm`；
+- `pm_i2c` 可选错误分类与计数：默认关闭保持 `PM_ERR_IO` 与零计数，开启后
+  AF → `PM_ERR_NACK`，BERR/ARLO/OVR → `PM_ERR_BUS`，截止时间到期 → `PM_ERR_TIMEOUT`，
+  并提供分项计数（契约 §12.7）；
+- 错误码：`PM_ERR_NACK`、`PM_ERR_BUS`，`pm_err_str` 同步。
+
+### 纠正
+
+- **PB15 引脚身份**：`HARDWARE.md` 的实测接线与板端 `pm_encoder_button()`
+  （`(GPIOB->IDR >> 15) & 1`）一致认定 PB15 是 EC11 按键；模型库此前称其为 SPI2_MOSI
+  并据此不启用按键，属模型库侧错误。本轮只改模型库侧（`platform/stm32f103/board_f103c8.c`、
+  `board_f103c8.h`、`include/pm/pm_encoder.h`、`include/pm/pm_port_stm32f1.h`、
+  契约 §19.1/§19.4/§19.6），板端工程与 `HARDWARE.md` 未动；
+- 电气含义：PB15 是**复用互斥**，不是两个身份同时成立——同一时刻只能作 SPI2_MOSI
+  或按键输入。模型库引脚表按"按键 = PB15，与 `BOARD_SPI_2` 互斥"记录，不再写成"不属于
+  本板编码器"。
+
+### 验证基线
+
+- 主机单测：`676 checks, 0 failure(s)`；
+- 固件构建：FLASH 28436 B（43.39%），RAM 3384 B（16.52%）；
+- 分层：`0 ERROR / 18 WARN`（WARN 最后一条行号随端口文件改动变为 2428，README 已同步）。
+
 ## v0.5（2026-11-19，提交 `76e4863`、`9b393e6`）
 
 ### 新增

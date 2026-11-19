@@ -4,15 +4,16 @@
 
 一套按"接口契约优先"方式组织的 STM32F1 外设代码：上层只依赖 `include/pm/` 里的公共 API，芯片相关的一切都收敛在 port 层。目标是换板子只改一张引脚表，换芯片只换一个 port 目录，核心逻辑永远能在主机上跑单测。
 
-当前版本 **v0.5**，配套 STM32F103C8T6 最小系统板（72 MHz、20 KB RAM、64 KB Flash）。
-已实现 GPIO、UART、SPI（主机全双工，中断 + 可选 DMA）、I2C（主机，中断状态机，支持写读合并；repeated START 仅适用于寄存器型器件）、ADC（单通道单次转换，EOC 中断）、PWM（定时器比较输出）、软件音调（TIM3 中断翻转）、循迹（单路数字量）、正交编码器（AB x4）、继电器（单路 GPIO，极性必填）与电机（DRV8833 形态，双 PWM 输入，含滑行/刹车两种停止）。
+当前版本 **v0.6**，配套 STM32F103C8T6 最小系统板（72 MHz、20 KB RAM、64 KB Flash）。
+已实现 GPIO、UART、SPI（主机全双工，中断 + 可选 DMA）、I2C（主机，中断状态机，支持写读合并；repeated START 仅适用于寄存器型器件）、ADC（单通道单次转换，EOC 中断）、PWM（定时器比较输出）、软件音调（TIM3 中断翻转）、循迹（单路数字量）、正交编码器（AB x4，可选按键输入）、继电器（单路 GPIO，极性必填）、电机（DRV8833 形态，双 PWM 输入，含滑行/刹车两种停止）与舵机（角度↔脉宽映射，独立成模型）。
 
 ## 能做什么
 
 - 驱动 GPIO、UART、SPI（主机全双工）、I2C（主机）、ADC（单通道单次）、PWM（定时器比较输出）、
-  软件音调、循迹、正交编码器、继电器、电机（DRV8833）；
+  软件音调、循迹、正交编码器（可选按键）、继电器、电机（DRV8833）、舵机（角度接口）；
 - 定时器是共享资源：模块在 init 时声明 TIM/PSC/ARR/通道，冲突返回 `PM_ERR_CONFLICT`，
-  不会静默覆盖别人的时基（见 `docs/00-contract.md` §20）；
+  不会静默覆盖别人的时基；端口还会探测"被非模型代码启动/重配"的定时器，遇到即拒绝
+  （`PM_ERR_CONFLICT`，见 `docs/00-contract.md` §20）；
 - 异步接口统一走事件队列：ISR 只投递事件，用户回调只在 `pm_*_poll()` 的主循环上下文执行；
 - 静态分配、无 `malloc`；错误码为 `pm_err_t` 负值；超时语义统一（0 = 立即返回 `PM_ERR_AGAIN`，>0 = 有界等待）；
 - 换板子只改 `platform/stm32f103/board_f103c8.c` 的引脚表，换芯片只换一个 port 目录；
@@ -30,9 +31,10 @@
 | PWM | 未接负载（电机 / 舵机 / 蜂鸣器）；只验证了配置与占空比换算 |
 | 软件音调 | 未上板；主机 mock 覆盖生命周期与参数校验，声学效果未验证 |
 | 循迹 | 未上板；只验证了极性判定与 PB14/SPI2 互斥逻辑 |
-| 编码器 | 未上板；只验证了 AB x4 解码表（主机单测） |
+| 编码器 | 未上板；只验证了 AB x4 解码表与可选按键语义（主机单测）；按键实测见板端工程 |
 | 继电器 | 未上板；只验证了极性映射、失效安全与两实例重入（主机 mock） |
 | 电机 | 未上板；只验证了方向/占空比组合、滑行与刹车、频率冲突（主机 mock）；形态仅适用 DRV8833 |
+| 舵机 | 未接真实舵机；只验证了角度↔脉宽换算、帧率约束与通道冲突（主机 mock） |
 
 已在真实板卡上验证的只有：时钟（HSE→PLL 72 MHz）、UART 收发，以及 I2C 对 AHT20 的读时序。
 
@@ -48,12 +50,12 @@
 | --- | --- | --- |
 | 时钟 | HSE→PLL 72 MHz | `pm_clock_init()` 配置；HSE 起振失败回落 HSI 8 MHz，`pm_platform_core_clock()` 可读实际主频 |
 | ARM 交叉编译 | 通过 | `arm-none-eabi-gcc 14.3.1`，无项目代码警告 |
-| 链接 | 通过 | Flash 28048 B / 64 KB（42.80%），RAM 3376 B / 20 KB（16.48%） |
-| 产物 | 已生成 | `pm_f103_demo`（ELF）/ `.bin`（28048 B）/ `.hex` / `.map` |
-| 主机单测 | 通过 | 569 项断言，0 失败（MSVC 19.51，C11） |
+| 链接 | 通过 | Flash 28436 B / 64 KB（43.39%），RAM 3384 B / 20 KB（16.52%） |
+| 产物 | 已生成 | `pm_f103_demo`（ELF）/ `.bin`（28436 B）/ `.hex` / `.map` |
+| 主机单测 | 通过 | 676 项断言，0 失败（MSVC 19.51，C11） |
 | 动态分配 | 不存在 | `nm` 中无 `malloc` / `free` / `_sbrk` |
 | 向量表 | 正确 | 首字 `0x20005000`（20 KB RAM 顶），Reset_Handler `0x08000229`（Thumb） |
-| **上板运行** | **部分验证** | 时钟与 UART 收发已在真实板卡上验证；I2C 已用板载 AHT20（0x70）验证触发/读取时序；SPI、ADC、PWM、音调、循迹、编码器、继电器、电机未接真实器件/负载 |
+| **上板运行** | **部分验证** | 时钟与 UART 收发已在真实板卡上验证；I2C 已用板载 AHT20（0x70）验证触发/读取时序；SPI、ADC、PWM、音调、循迹、编码器、继电器、电机、舵机未接真实器件/负载 |
 
 未做上板验证的部分不写成"可用"。
 
@@ -71,6 +73,10 @@
 | v0.3 | + UART RX 与 SPI MISO 引脚修复、I2C | 18896 B（28.83%） | 2840 B（13.87%） | +5792 B / +112 B |
 | v0.4 | + ADC（单次转换）与 PWM（TIM2/TIM4 比较输出） | 24424 B（37.27%） | 3104 B（15.16%） | +5528 B / +264 B |
 | v0.5 | + 软件音调 / 循迹 / 编码器 / 定时器仲裁 | 28048 B（42.80%） | 3376 B（16.48%） | +3624 B / +272 B |
+| v0.6 | + 定时器外部占用探测 / 编码器可选按键 / 舵机 / I2C 错误分类 | 28436 B（43.39%） | 3384 B（16.52%） | +388 B / +8 B |
+
+v0.6 一行取自本次工作树的构建输出（提交后可用同一命令复现）；增量主要是 `pm_servo`
+组合层、`pm_timer` 探测钩子与 `pm_i2c` 分类/计数，RAM 只增一个对象字段的尾部填充。
 
 v0.5 一行取自本次工作树的构建输出（提交后可用同一命令复现）；增量主要是 HAL TIM 更新
 中断路径、三组引脚/上下文表与 `pm_timer` 静态占用表（8 条）。
@@ -105,8 +111,8 @@ v0.4 的 Flash 增量来自 HAL ADC（`HAL_ADC_Init`、`HAL_ADC_Start_IT`、
 > ```
 >
 > Flash/RAM 取链接器打印的 `Memory region` 表（`.bin` 大小与 Flash 占用一致）。
-> 对应提交：v0.1 `aa342e5`、v0.2 `917cc09`、v0.3 `7bde865`；v0.4 为 `main` 最新提交。
-> v0.5 待本轮工作树提交后再补对应提交号。
+> 对应提交：v0.1 `aa342e5`、v0.2 `917cc09`、v0.3 `7bde865`；v0.4 见 `main` 历史；
+> v0.5 `76e4863`、`9b393e6`；v0.6 末提交 `4e0ae8d`。
 
 ---
 
@@ -162,7 +168,7 @@ cmake --build build-host --config Debug
 ./build-host/Debug/pm_host_tests.exe
 ```
 
-输出形如 `569 checks, 0 failure(s)`，退出码 0 表示全过。
+输出形如 `676 checks, 0 failure(s)`，退出码 0 表示全过。
 
 ---
 
@@ -287,6 +293,9 @@ while (pm_i2c_poll(&s_i2c, &evt, NULL, NULL)) {
 - `timeout == 0` 时立即返回 `PM_ERR_AGAIN`，缓冲区在 `I2C_DONE/I2C_ERROR` 被 poll 到之前归驱动借用；
 - 超时通过 `HAL_I2C_DeInit + Init` 复位外设，`done` 报告已移动字节数；**不做总线清除**；
 - 实际 SCL 由 `pm_i2c_clock_hz()` 从 CCR 与 PCLK1 反算，不是回显请求值；
+- 默认所有硬件错误都返回 `PM_ERR_IO`；`pm_i2c_set_error_counting(&s_i2c, true)` 后，
+  AF 返回 `PM_ERR_NACK`，BERR/ARLO/OVR 返回 `PM_ERR_BUS`，计数用 `pm_i2c_get_error_counts` 取；
+  开启时计数先清零，`stats.last_error` 与事件 `arg` 仍是原始掩码（契约 §12.7）；
 - `pm_i2c_write_read` 的 repeated START 只适用于**寄存器型**器件（写寄存器地址后直接读）；
 - **命令触发型**器件（AHT20 等：写一条命令即开始内部转换）必须
   `pm_i2c_write`（STOP 结束）→ `pm_osal_delay_ms()` → `pm_i2c_read`。
@@ -357,6 +366,37 @@ static const pm_pwm_cfg_t servo_cfg = {
 
 完整规则见 [docs/00-contract.md](docs/00-contract.md) 第 14 节。
 
+### 舵机（角度接口，v0.6）
+
+```c
+static pm_servo_t s_sg90;
+
+static const pm_servo_cfg_t servo_cfg = {
+    .hw_id = BOARD_PWM_SERVO,             /* 仍是一个 PWM 通道 */
+    .freq_hz = 50u,
+    .range = {
+        .angle_min_deg  = PM_SERVO_SG90_ANGLE_MIN,   /* 0   */
+        .angle_max_deg  = PM_SERVO_SG90_ANGLE_MAX,   /* 180 */
+        .pulse_min_us   = PM_SERVO_SG90_PULSE_MIN_US,/* 500 */
+        .pulse_max_us   = PM_SERVO_SG90_PULSE_MAX_US,/* 2500 */
+    },
+    .start_angle_deg = 90u,               /* 必填：init 立即驱动到这个位置 */
+};
+
+(void)pm_servo_init(&s_sg90, &servo_cfg);
+(void)pm_servo_set_angle(&s_sg90, 45u);   /* 越界返回 PM_ERR_RANGE，不夹紧 */
+
+uint16_t us;
+(void)pm_servo_pulse_from_angle(&servo_cfg.range, 45u, &us);  /* 纯函数，可单测 */
+```
+
+- 换 SG90 以外的舵机只改 `range` 四个端点，逻辑不动；
+- `freq_hz` 必须容得下 `pulse_max_us`（1 ms 帧装不下 2.5 ms 脉宽时 init 返回 `PM_ERR_RANGE`）；
+- 越界不夹紧、不静默改角度，上一次位置保持不变；
+- 与 `pm_pwm` 共用定时器仲裁：同一定时器的通道必须同频率。
+
+完整规则见 [docs/00-contract.md](docs/00-contract.md) 第 24 节。
+
 ### 软件音调 / 循迹 / 编码器
 
 ```c
@@ -380,18 +420,26 @@ static const pm_track_cfg_t track_cfg = {
 bool on_line = false;
 (void)pm_track_read_raw(&s_track, &on_line);
 
-/* 编码器：PA8/PA9 双沿，计数在 core 里解码 */
+/* 编码器：PA8/PA9 双沿，计数在 core 里解码；按键是可选能力 */
 static const pm_encoder_cfg_t enc_cfg = {
     .hw_id = BOARD_ENCODER_LEFT, .invert = 0u,
+    .has_button = 1u,                /* 0（或不写）= 没接按键，查询返回 PM_ERR_DISABLED */
 };
 (void)pm_encoder_init(&s_enc, &enc_cfg);
 int32_t ticks = pm_encoder_count(&s_enc);
+
+bool pressed = false;
+if (pm_encoder_button(&s_enc, &pressed) == PM_OK && pressed) {
+    /* 按键按下；极性由端口定义（本板 KY-040 低 = 按下） */
+}
 ```
 
 - 音调的 tick 长度、占空比量化是端口实现细节，**不要在应用里依赖**；
 - 音调与 PWM 蜂鸣器在 PB9 上互斥，后开的返回 `PM_ERR_CONFLICT`；
 - 循迹与 SPI2 在 PB14 上互斥，后开的返回 `PM_ERR_CONFLICT`；
 - 编码器 `count` 由 ISR 写、主循环读；`pm_encoder_reset()` 不是中断安全的；
+- 按键未配置时 `pm_encoder_init` 仍成功，`pm_encoder_button` 返回 `PM_ERR_DISABLED` 且
+  `*pressed = false`——"没装"不是故障；本板按键在 PB15，与 SPI2_MOSI 复用，不能同时用；
 - 三者都走定时器/引脚仲裁，规则见契约 §17–§20。
 
 ---
@@ -438,7 +486,7 @@ python3 tools/check_layering.py . --roles .arch-roles
 
 - 8 条：`src/port/stm32f1/pm_port_stm32f1.c` 第 29/33/36/39/42/45/48/51 行 include 组件层
   头文件（`pm_uart.h` 等八个模块），只取句柄类型与 ISR 钩子声明，不调用组件公开 API；
-- 10 条：同文件第 391/401/413/780/792/1161/1165/1385/1394/2349 行调用 `pm_*_hw_*`
+- 10 条：同文件第 391/401/413/780/792/1161/1165/1385/1394/2428 行调用 `pm_*_hw_*`
   ISR 钩子，这些钩子按契约只允许端口层在中断上下文调用。
 
 即：WARN 记录的是"依赖倒置 + 中断回投"这两条设计选择。WARN 数量或内容变化时，
@@ -495,13 +543,18 @@ python3 tools/check_layering.py . --roles .arch-roles
 - 软件音调只做单音方波，不做包络/音量/多音混合；每 10 µs 一次更新中断，满频 5 kHz 时
   中断率约 100 kHz；与 PWM 蜂鸣器在 PB9 上互斥；未上板，声学未验证；
 - 循迹只做单路数字量，不做多路阵列、阈值自适应与去抖；与 SPI2 在 PB14 上互斥；未上板；
-- 编码器只做 AB x4 计数，不做测速、Z 相与方向滤波；`reset` 非中断安全；未上板；
+- 编码器只做 AB x4 计数，不做测速、Z 相与方向滤波；`reset` 非中断安全；按键是可选能力，
+  本板 PB15 与 SPI2_MOSI 复用；未上板；
+- 舵机只做角度→脉宽映射（整数、四舍五入到 µs），不做加减速、多舵机同步与反馈闭环；
+  依赖的仍是 `pm_pwm` 通道，同一定时器同频率的约束不变；未接真实舵机；
 - 定时器仲裁表固定 8 条、按 `hw_id` 逻辑编号；只判"能不能共存"，不做自动重分配；
-  参数兼容判据只有"同 PSC/ARR + 通道不重叠"一种；
+  参数兼容判据只有"同 PSC/ARR + 通道不重叠"一种；端口探测能发现 CEN 已置位或重映射位
+  非零的裸占用，但"外部代码把引脚改了而没开定时器"这类占用看不见；
 - SPI 只做主机、8 位帧、单传输（无队列）；MISO 在主机模式下配为输入上拉
   （RM0008 允许输入浮空或上拉），SCK/MOSI 为复用推挽；未接从机，未上板验证；
 - 本板 SPI 硬件 NSS 引脚（PA4 / PB12）已被 NTC、KEY1 占用，`PM_SPI_NSS_HARD` 会返回 `PM_ERR_PARAM`，只能用 GPIO 软件片选；
 - I2C 只做主机、7 位地址、无 DMA；超时只复位外设，不做 SCL 脉冲总线恢复；
+  错误分类（AF/BERR/超时等）是可选功能、默认关闭，关闭时一律 `PM_ERR_IO`；
   AHT20（0x70）已验证命令触发型时序，板载 OLED（0x7A）未验证；
 - UART 目前是逐字节中断，尚未提供 DMA + 空闲中断的接收路径；
 - port 注册表无条件引用已实现外设的 ops：不用 SPI/I2C 也会链接对应驱动，后续可按需裁剪；
