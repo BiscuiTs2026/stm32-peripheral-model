@@ -39,6 +39,9 @@
 #if defined(PM_ENABLE_MOTOR)
 #include "pm_motor.h"
 #endif
+#if defined(PM_ENABLE_SERVO)
+#include "pm_servo.h"
+#endif
 #include "pm_timer.h"
 #include "pm_port_mock.h"
 
@@ -1713,6 +1716,150 @@ static void test_motor(void)
 }
 #endif /* PM_ENABLE_MOTOR */
 
+#if defined(PM_ENABLE_SERVO)
+static void test_servo(void)
+{
+    pm_servo_t      s;
+    pm_servo_cfg_t  cfg;
+    pm_servo_range_t r;
+    uint16_t        pulse = 0u;
+    uint16_t        angle = 0u;
+
+    mock_reset();
+    memset(&s, 0, sizeof(s));
+    memset(&cfg, 0, sizeof(cfg));
+
+    /* ---- pure angle -> pulse mapping ---- */
+    r.angle_min_deg  = PM_SERVO_SG90_ANGLE_MIN;
+    r.angle_max_deg  = PM_SERVO_SG90_ANGLE_MAX;
+    r.pulse_min_us   = PM_SERVO_SG90_PULSE_MIN_US;
+    r.pulse_max_us   = PM_SERVO_SG90_PULSE_MAX_US;
+
+    CHECK(pm_servo_pulse_from_angle(NULL, 90u, &pulse) == PM_ERR_NULL);
+    CHECK(pm_servo_pulse_from_angle(&r, 90u, NULL) == PM_ERR_NULL);
+    CHECK(pm_servo_pulse_from_angle(&r, 0u, &pulse) == PM_OK);
+    CHECK(pulse == 500u);
+    CHECK(pm_servo_pulse_from_angle(&r, 90u, &pulse) == PM_OK);
+    CHECK(pulse == 1500u);                 /* centre must be exact */
+    CHECK(pm_servo_pulse_from_angle(&r, 180u, &pulse) == PM_OK);
+    CHECK(pulse == 2500u);
+    CHECK(pm_servo_pulse_from_angle(&r, 181u, &pulse) == PM_ERR_RANGE);
+
+    /* Degenerate ranges are caller bugs, never defaulted. */
+    {
+        pm_servo_range_t bad = r;
+
+        bad.angle_max_deg = bad.angle_min_deg;
+        CHECK(pm_servo_pulse_from_angle(&bad, 0u, &pulse) == PM_ERR_PARAM);
+        bad = r;
+        bad.pulse_min_us = 0u;
+        CHECK(pm_servo_pulse_from_angle(&bad, 90u, &pulse) == PM_ERR_PARAM);
+        bad = r;
+        bad.pulse_max_us = bad.pulse_min_us;
+        CHECK(pm_servo_pulse_from_angle(&bad, 90u, &pulse) == PM_ERR_PARAM);
+    }
+
+    /* A different servo means different numbers, same logic. */
+    {
+        pm_servo_range_t mg = r;
+
+        mg.angle_min_deg = 10u;
+        mg.angle_max_deg = 170u;
+        mg.pulse_min_us  = 600u;
+        mg.pulse_max_us  = 2400u;
+        CHECK(pm_servo_pulse_from_angle(&mg, 10u, &pulse) == PM_OK);
+        CHECK(pulse == 600u);
+        CHECK(pm_servo_pulse_from_angle(&mg, 90u, &pulse) == PM_OK);
+        CHECK(pulse == 1500u);
+        CHECK(pm_servo_pulse_from_angle(&mg, 170u, &pulse) == PM_OK);
+        CHECK(pulse == 2400u);
+        CHECK(pm_servo_pulse_from_angle(&mg, 9u, &pulse) == PM_ERR_RANGE);
+    }
+
+    /* ---- device model ---- */
+    CHECK(pm_servo_init(NULL, &cfg) == PM_ERR_NULL);
+    CHECK(pm_servo_init(&s, NULL) == PM_ERR_NULL);
+
+    cfg.hw_id           = 0u;
+    cfg.freq_hz         = 50u;
+    cfg.range           = r;
+    cfg.start_angle_deg = 200u;
+    CHECK(pm_servo_init(&s, &cfg) == PM_ERR_RANGE);   /* start angle outside */
+    CHECK(mock_pwm_is_open(0u) == 0);
+
+    cfg.start_angle_deg = 90u;
+    cfg.freq_hz         = 0u;
+    CHECK(pm_servo_init(&s, &cfg) == PM_ERR_PARAM);   /* no frame rate */
+    cfg.freq_hz = 1000u;
+    CHECK(pm_servo_init(&s, &cfg) == PM_ERR_RANGE);   /* 1 ms frame < 2.5 ms */
+    cfg.freq_hz = 50u;
+
+    cfg.hw_id = MOCK_PWM_COUNT;
+    CHECK(pm_servo_init(&s, &cfg) == PM_ERR_RANGE);   /* unknown channel */
+    cfg.hw_id = 0u;
+
+    CHECK(pm_servo_init(&s, &cfg) == PM_OK);
+    CHECK(mock_pwm_is_open(0u) == 1);
+    CHECK(mock_pwm_frequency(0u) == 50u);
+    CHECK(mock_pwm_duty(0u) == 75u);                  /* 1500 us of 20 ms */
+    CHECK(pm_servo_get_angle(&s, &angle) == PM_OK);
+    CHECK(angle == 90u);
+    CHECK(pm_servo_init(&s, &cfg) == PM_ERR_BUSY);
+
+    CHECK(pm_servo_set_angle(&s, 0u) == PM_OK);
+    CHECK(mock_pwm_duty(0u) == 25u);
+    CHECK(pm_servo_set_angle(&s, 180u) == PM_OK);
+    CHECK(mock_pwm_duty(0u) == 125u);
+
+    /* Out of range keeps the previous position untouched. */
+    CHECK(pm_servo_set_angle(&s, 181u) == PM_ERR_RANGE);
+    CHECK(mock_pwm_duty(0u) == 125u);
+    CHECK(pm_servo_get_angle(&s, &angle) == PM_OK);
+    CHECK(angle == 180u);
+
+    /* A different frame rate is just a parameter: 333 Hz -> 3.003 ms frame. */
+    {
+        pm_servo_t fast;
+        pm_servo_cfg_t fcfg = cfg;
+
+        memset(&fast, 0, sizeof(fast));
+        fcfg.hw_id   = 2u;
+        fcfg.freq_hz = 333u;
+        CHECK(pm_servo_init(&fast, &fcfg) == PM_OK);
+        CHECK(mock_pwm_frequency(2u) == 333u);
+        CHECK(mock_pwm_duty(2u) == 500u);             /* 1500 us / 3003 us */
+        CHECK(pm_servo_set_angle(&fast, 0u) == PM_OK);
+        CHECK(mock_pwm_duty(2u) == 167u);             /* 500 us / 3003 us */
+        CHECK(pm_servo_deinit(&fast) == PM_OK);
+        CHECK(mock_pwm_is_open(2u) == 0);
+    }
+
+    /* A channel already owned elsewhere is reported, not stolen. */
+    {
+        pm_pwm_t       other;
+        pm_pwm_cfg_t   ocfg;
+        pm_servo_t     busy;
+        pm_servo_cfg_t bcfg = cfg;
+
+        memset(&other, 0, sizeof(other));
+        memset(&ocfg, 0, sizeof(ocfg));
+        memset(&busy, 0, sizeof(busy));
+        ocfg.hw_id   = 3u;
+        ocfg.freq_hz = 50u;
+        CHECK(pm_pwm_init(&other, &ocfg) == PM_OK);
+        bcfg.hw_id = 3u;
+        CHECK(pm_servo_init(&busy, &bcfg) == PM_ERR_BUSY);
+        CHECK(pm_pwm_deinit(&other) == PM_OK);
+    }
+
+    CHECK(pm_servo_deinit(&s) == PM_OK);
+    CHECK(mock_pwm_is_open(0u) == 0);
+    CHECK(pm_servo_get_angle(&s, &angle) == PM_ERR_STATE);
+    CHECK(pm_servo_set_angle(&s, 90u) == PM_ERR_STATE);
+    CHECK(pm_servo_deinit(&s) == PM_ERR_STATE);
+}
+#endif /* PM_ENABLE_SERVO */
+
 int main(void)
 {
     test_ringbuf();
@@ -1763,6 +1910,9 @@ int main(void)
 #endif
 #if defined(PM_ENABLE_MOTOR)
     test_motor();
+#endif
+#if defined(PM_ENABLE_SERVO)
+    test_servo();
 #endif
 
     printf("\n%d checks, %d failure(s)\n", s_checks, s_failures);

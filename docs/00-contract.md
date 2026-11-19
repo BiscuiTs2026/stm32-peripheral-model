@@ -1204,3 +1204,65 @@ void pm_timer_set_probe(pm_timer_probe_fn fn, void *ctx);
   `PM_ERR_PARAM`、未打开通道报 `PM_ERR_STATE`、brake 后 `set()` 立即退出、invert 交换、
   两实例交叉操作互不影响、`deinit` 回滑行。
 - 板端：**未验证**（本轮无板端证据；DRV8833 真值表依据数据手册，接线依据板端会话口述）。
+
+---
+
+## 24. 舵机模型（pm_servo，v0.6 新增）
+
+### 24.1 为什么单独成模型
+
+舵机的电气接口不变（一根 PWM，50 Hz 或更高帧率），变的是**角度与脉宽的映射**：SG90
+是 0–180° ↔ 500–2500 µs，MG996R 端点不同，数字舵机要 333 Hz。把这个映射塞进 `pm_pwm`
+会让"通用 PWM"绑死一种器件；参数化后换舵机只改四个数，不改逻辑。这就是本仓
+"设备级模型组合基础模型"（§22.1）的第二个实例：`pm_servo` 组合 `pm_pwm`，不新造端口、
+不建板级表。
+
+### 24.2 角度 → 脉宽（纯函数，契约核心）
+
+```c
+pm_err_t pm_servo_pulse_from_angle(const pm_servo_range_t *range,
+                                   uint16_t angle_deg, uint16_t *pulse_us);
+```
+
+| 项 | 判据（写死） |
+| --- | --- |
+| 定义域 | `angle_min_deg < angle_max_deg`、`0 < pulse_min_us < pulse_max_us`，否则 `PM_ERR_PARAM` |
+| 越界 | `angle_deg` 不在闭区间内 → `PM_ERR_RANGE`；**不夹紧、不取最近端** |
+| 换算 | `pulse = p_min + (angle − a_min) × (p_max − p_min) / (a_max − a_min)` |
+| 取整 | 四舍五入到 1 µs：`(offset × p_span + a_span/2) / a_span`，整数运算，无浮点 |
+| 端点 | `a_min → p_min`、`a_max → p_max` 必须精确成立 |
+| 空指针 | `PM_ERR_NULL` |
+
+参考端点：`PM_SERVO_SG90_*` = 0–180° ↔ 500–2500 µs。90° 必须得 1500 µs。
+
+### 24.3 设备形态与帧率约束
+
+- `pm_servo_cfg_t { hw_id, freq_hz, range, start_angle_deg }`，四项全部必填；
+  `start_angle_deg` 不设默认值——由调用方显式给出初始位置，避免"init 偷偷动一下"。
+- `init` 先按 0‰ 打开 `pm_pwm`，再驱动 `start_angle_deg`；任一步失败都 `pm_pwm_deinit`
+  并清空对象，不留半开通道。
+- **帧率约束**：`pulse_max_us` 必须 ≤ `1 000 000 / freq_hz`（一个周期内放得下整个脉宽
+  范围），否则 `PM_ERR_RANGE`。`freq_hz` 为 0 或 > 1 MHz → `PM_ERR_PARAM`。
+- 脉宽 → 占空比按**通道实际帧率**换算：`duty‰ = round(pulse_us × 1000 / period_us)`；
+  若实际周期短于脉宽 → `PM_ERR_RANGE`，不夹到 1000‰。
+- `pm_pwm` 的既有约束（同一 TIM 共享周期、通道不重叠）原样继承，冲突由 `pm_pwm` /
+  `pm_timer` 报 `PM_ERR_CONFLICT`（§20）。
+
+### 24.4 生命周期与状态
+
+- `init`：`PM_ERR_NULL` / `PM_ERR_PARAM` / `PM_ERR_RANGE` / `PM_ERR_BUSY`（已打开）/
+  透传 `pm_pwm_init` 的错误。
+- `set_angle`：越界 → `PM_ERR_RANGE`，**保持上一位置**（不写占空比）；成功后才更新
+  `angle_deg`。
+- `get_angle`：返回最后成功下发的角度；未初始化 → `PM_ERR_STATE`。
+- `deinit`：停输出、关通道、清空对象；未初始化 → `PM_ERR_STATE`。
+- 本模型不做斜坡、不做限速、不做堵转检测；这些属于上层运动控制。
+
+### 24.5 验证
+
+- 主机 `test_servo()`：端点精确性（0/90/180 → 500/1500/2500）、自定义区间
+  （10–170° ↔ 600–2400 µs）、越界 `PM_ERR_RANGE` 且占空比不变、非法区间/零脉宽
+  → `PM_ERR_PARAM`、`freq_hz=0` → `PM_ERR_PARAM`、`pulse_max` 超过帧长 → `PM_ERR_RANGE`、
+  非 50 Hz 帧率（333 Hz）换算、`init` 后 `angle_deg` 与占空比一致、重复 `init` → `PM_ERR_BUSY`、
+  `deinit` 后查询 → `PM_ERR_STATE`。
+- 板端：**未验证**。本板舵机在 PB8 / TIM4_CH3（`BOARD_PWM_SERVO`），需上板看实际转角。
