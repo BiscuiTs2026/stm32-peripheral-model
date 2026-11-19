@@ -123,7 +123,7 @@ extern const pm_f1_track_ctx_t pm_f1_track_ctx;
 /* Quadrature encoder pin pair. Both pins use the same EXTI line group.
  * The optional push button has no interrupt path: it is polled through
  * read_button(). Leave button_port/button_pin at 0 when the module has no SW
- * pin (this board: PB15 is SPI2_MOSI). */
+ * pin; this board wires the EC11 SW to PB15 (internal pull-up required). */
 typedef struct {
     GPIO_TypeDef *a_port;
     uint16_t      a_pin;

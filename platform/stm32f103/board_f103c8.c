@@ -85,10 +85,13 @@ const pm_f1_track_ctx_t pm_f1_track_ctx = {
     .count = (uint8_t)BOARD_TRACK_COUNT,
 };
 
-/* Encoder: A = PA8, B = PA9, both edges on EXTI9_5. */
+/* Encoder: A = PA8, B = PA9, both edges on EXTI9_5.
+ * Button = PB15 (EC11 SW, HARDWARE.md 4.4/4.9). PB15 has no external pull-up,
+ * so the port must enable the internal one. Its alternate function is
+ * SPI2_MOSI: encoder button and BOARD_SPI_2 are mutually exclusive. */
 static const pm_f1_encoder_pins_t s_encoder_pins[BOARD_ENCODER_COUNT] = {
     [BOARD_ENCODER_LEFT] = { GPIOA, GPIO_PIN_8, GPIOA, GPIO_PIN_9,
-                             EXTI9_5_IRQn },
+                             EXTI9_5_IRQn, GPIOB, GPIO_PIN_15 },
 };
 
 const pm_f1_encoder_ctx_t pm_f1_encoder_ctx = {

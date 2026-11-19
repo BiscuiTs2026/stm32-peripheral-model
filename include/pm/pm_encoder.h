@@ -19,8 +19,9 @@
  *    and the model then never touches a button pin: init still succeeds and
  *    pm_encoder_button() answers PM_ERR_DISABLED. Nothing assumes the module
  *    has an SW pin.
- *  - On this board PA8/PA9 are the encoder inputs; the push button shares
- *    SPI2_MOSI (PB15) and is therefore left unconfigured in the pin table.
+ *  - On this board PA8/PA9 are the encoder inputs and PB15 is the EC11 push
+ *    button (no external pull-up; the port enables the internal one). PB15's
+ *    alternate function is SPI2_MOSI, so button and SPI2 are exclusive.
  */
 #ifndef PM_ENCODER_H
 #define PM_ENCODER_H

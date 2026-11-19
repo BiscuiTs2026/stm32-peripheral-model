@@ -90,10 +90,13 @@ typedef enum {
     BOARD_TRACK_COUNT
 } board_track_id_t;
 
-/* Quadrature encoders. PB15 (the encoder push button) is SPI2_MOSI and is not
- * part of this module. */
+/* Quadrature encoders. The EC11 push button is wired to PB15 (HARDWARE.md
+ * 旋转编码器 row) and is part of this module as an optional capability
+ * (pm_encoder_cfg_t.has_button). PB15 has no external pull-up; the port uses
+ * the internal one. Its AF is SPI2_MOSI, so the button and BOARD_SPI_2 cannot
+ * be used at the same time. */
 typedef enum {
-    BOARD_ENCODER_LEFT = 0, /* PA8 = A, PA9 = B, both edges */
+    BOARD_ENCODER_LEFT = 0, /* PA8 = A, PA9 = B, PB15 = button */
     BOARD_ENCODER_COUNT
 } board_encoder_id_t;
 
