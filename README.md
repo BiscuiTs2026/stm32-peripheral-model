@@ -113,6 +113,7 @@ v0.4 的 Flash 增量来自 HAL ADC（`HAL_ADC_Init`、`HAL_ADC_Start_IT`、
 ```
 docs/00-contract.md     接口契约（规范，先读这个）
 docs/01-layering.md     目录、依赖、时序、移植
+docs/02-changelog.md    结构性变更记录与文件移动留痕
 include/pm/             公共头，无厂商类型
 src/core/               与硬件无关的模型（可在主机编译）
 src/common/             与硬件无关的纯逻辑（时基数学、定时器仲裁），任何层可依赖
