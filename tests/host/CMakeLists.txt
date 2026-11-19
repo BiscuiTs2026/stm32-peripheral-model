@@ -24,7 +24,7 @@ set(PM_TEST_SOURCES
     ../../src/common/pm_timer.c
 )
 set(PM_TEST_DEFS "")
-foreach(mod spi i2c adc pwm tone track encoder relay)
+foreach(mod spi i2c adc pwm tone track encoder relay motor)
     string(TOUPPER ${mod} PM_MOD_UPPER)
     if(EXISTS ${PM_TEST_ROOT}/include/pm/pm_${mod}.h AND
        EXISTS ${PM_TEST_ROOT}/src/core/pm_${mod}.c)

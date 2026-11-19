@@ -36,6 +36,9 @@
 #if defined(PM_ENABLE_RELAY)
 #include "pm_relay.h"
 #endif
+#if defined(PM_ENABLE_MOTOR)
+#include "pm_motor.h"
+#endif
 #include "pm_timer.h"
 #include "pm_port_mock.h"
 
@@ -1464,6 +1467,160 @@ static void test_relay(void)
 }
 #endif /* PM_ENABLE_RELAY */
 
+#if defined(PM_ENABLE_MOTOR)
+static void pwm_open(pm_pwm_t *p, uint8_t hw_id, uint32_t freq_hz)
+{
+    pm_pwm_cfg_t cfg;
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.hw_id = hw_id;
+    cfg.freq_hz = freq_hz;
+    cfg.duty_permille = 0u;
+    CHECK(pm_pwm_init(p, &cfg) == PM_OK);
+}
+
+static void test_motor(void)
+{
+    pm_pwm_t a;
+    pm_pwm_t b;
+    pm_pwm_t c;
+    pm_pwm_t d;
+    pm_motor_t m1;
+    pm_motor_t m2;
+    pm_motor_cfg_t cfg;
+    uint16_t coast_pair[2];
+
+    mock_reset();
+    memset(&a, 0, sizeof(a));
+    memset(&b, 0, sizeof(b));
+    memset(&c, 0, sizeof(c));
+    memset(&d, 0, sizeof(d));
+    memset(&m1, 0, sizeof(m1));
+    memset(&m2, 0, sizeof(m2));
+
+    pwm_open(&a, 0u, 20000u);
+    pwm_open(&b, 1u, 20000u);
+    pwm_open(&c, 2u, 10000u);   /* deliberately different frequency */
+    pwm_open(&d, 3u, 20000u);
+
+    memset(&cfg, 0, sizeof(cfg));
+    CHECK(pm_motor_init(NULL, &cfg) == PM_ERR_NULL);
+    CHECK(pm_motor_init(&m1, NULL) == PM_ERR_NULL);
+
+    cfg.in1 = &a;
+    cfg.in2 = &b;
+    CHECK(pm_motor_init(&m1, &cfg) == PM_ERR_PARAM);    /* invert UNSET */
+    cfg.invert = PM_MOTOR_INVERT_OFF;
+
+    cfg.in2 = &a;
+    CHECK(pm_motor_init(&m1, &cfg) == PM_ERR_PARAM);    /* same channel twice */
+    cfg.in2 = &b;
+
+    /* Closed channel is a state error, not a silent coast. */
+    {
+        pm_pwm_t closed;
+
+        memset(&closed, 0, sizeof(closed));
+        cfg.in2 = &closed;
+        CHECK(pm_motor_init(&m1, &cfg) == PM_ERR_STATE);
+        cfg.in2 = &b;
+    }
+
+    /* Same timer, two periods: the TIM2 collision in miniature. */
+    cfg.in1 = &c;
+    CHECK(pm_motor_init(&m1, &cfg) == PM_ERR_CONFLICT);
+    cfg.in1 = &a;
+
+    CHECK(pm_motor_init(&m1, &cfg) == PM_OK);
+    CHECK(pm_motor_state(&m1) == PM_MOTOR_STATE_STOP_COAST);
+    CHECK(mock_pwm_duty(0u) == 0u);
+    CHECK(mock_pwm_duty(1u) == 0u);
+    CHECK(pm_motor_init(&m1, &cfg) == PM_ERR_BUSY);
+
+    /* Forward: duty on IN1, IN2 held low. */
+    CHECK(pm_motor_set(&m1, 500u, PM_MOTOR_DIR_FORWARD) == PM_OK);
+    CHECK(mock_pwm_duty(0u) == 500u);
+    CHECK(mock_pwm_duty(1u) == 0u);
+    CHECK(pm_motor_state(&m1) == PM_MOTOR_STATE_RUN);
+    CHECK(pm_motor_is_running(&m1) == true);
+
+    /* Reverse really moves the duty onto the other input. */
+    CHECK(pm_motor_set(&m1, 300u, PM_MOTOR_DIR_REVERSE) == PM_OK);
+    CHECK(mock_pwm_duty(0u) == 0u);
+    CHECK(mock_pwm_duty(1u) == 300u);
+    CHECK(pm_motor_dir(&m1) == PM_MOTOR_DIR_REVERSE);
+    CHECK(pm_motor_duty_permille(&m1) == 300u);
+
+    /* duty 0 is a coast, whatever direction was asked for. */
+    CHECK(pm_motor_set(&m1, 0u, PM_MOTOR_DIR_FORWARD) == PM_OK);
+    CHECK(mock_pwm_duty(0u) == 0u);
+    CHECK(mock_pwm_duty(1u) == 0u);
+    CHECK(pm_motor_state(&m1) == PM_MOTOR_STATE_STOP_COAST);
+    CHECK(pm_motor_is_running(&m1) == false);
+
+    /* Brake: both inputs at 1000 permille, no drive reported. */
+    CHECK(pm_motor_stop(&m1, PM_MOTOR_STOP_BRAKE) == PM_OK);
+    CHECK(mock_pwm_duty(0u) == 1000u);
+    CHECK(mock_pwm_duty(1u) == 1000u);
+    CHECK(pm_motor_state(&m1) == PM_MOTOR_STATE_STOP_BRAKE);
+    CHECK(pm_motor_is_running(&m1) == false);
+    CHECK(pm_motor_duty_permille(&m1) == 0u);
+
+    /* Leaving brake is immediate: no duty left sitting at 1000. */
+    CHECK(pm_motor_set(&m1, 600u, PM_MOTOR_DIR_FORWARD) == PM_OK);
+    CHECK(mock_pwm_duty(0u) == 600u);
+    CHECK(mock_pwm_duty(1u) == 0u);
+    CHECK(pm_motor_state(&m1) == PM_MOTOR_STATE_RUN);
+
+    /* Equivalence: set(0) and stop(COAST) produce the same electrical
+     * state; both differ from brake. */
+    CHECK(pm_motor_set(&m1, 0u, PM_MOTOR_DIR_REVERSE) == PM_OK);
+    coast_pair[0] = mock_pwm_duty(0u);
+    coast_pair[1] = mock_pwm_duty(1u);
+    CHECK(pm_motor_stop(&m1, PM_MOTOR_STOP_COAST) == PM_OK);
+    CHECK(mock_pwm_duty(0u) == coast_pair[0]);
+    CHECK(mock_pwm_duty(1u) == coast_pair[1]);
+    CHECK(coast_pair[0] == 0u);
+    CHECK(coast_pair[1] == 0u);
+    CHECK(pm_motor_stop(&m1, PM_MOTOR_STOP_BRAKE) == PM_OK);
+    CHECK(mock_pwm_duty(0u) != coast_pair[0]);
+    CHECK(mock_pwm_duty(1u) != coast_pair[1]);
+    CHECK(pm_motor_stop(&m1, PM_MOTOR_STOP_COAST) == PM_OK);
+
+    /* Second instance: invert swaps which input carries the duty. */
+    CHECK(pm_pwm_deinit(&c) == PM_OK);
+    pwm_open(&c, 2u, 20000u);
+    cfg.in1 = &c;
+    cfg.in2 = &d;
+    cfg.invert = PM_MOTOR_INVERT_ON;
+    CHECK(pm_motor_init(&m2, &cfg) == PM_OK);
+
+    CHECK(pm_motor_set(&m1, 600u, PM_MOTOR_DIR_FORWARD) == PM_OK);
+    CHECK(pm_motor_set(&m2, 400u, PM_MOTOR_DIR_FORWARD) == PM_OK);
+    CHECK(mock_pwm_duty(0u) == 600u);   /* m1: IN1 */
+    CHECK(mock_pwm_duty(1u) == 0u);
+    CHECK(mock_pwm_duty(2u) == 0u);     /* m2: inverted -> IN2 */
+    CHECK(mock_pwm_duty(3u) == 400u);
+
+    /* Cross operations: neither instance disturbs the other. */
+    CHECK(pm_motor_stop(&m1, PM_MOTOR_STOP_BRAKE) == PM_OK);
+    CHECK(mock_pwm_duty(2u) == 0u);
+    CHECK(mock_pwm_duty(3u) == 400u);
+    CHECK(pm_motor_state(&m2) == PM_MOTOR_STATE_RUN);
+    CHECK(pm_motor_stop(&m2, PM_MOTOR_STOP_COAST) == PM_OK);
+    CHECK(mock_pwm_duty(0u) == 1000u);
+    CHECK(mock_pwm_duty(1u) == 1000u);
+    CHECK(pm_motor_state(&m1) == PM_MOTOR_STATE_STOP_BRAKE);
+    CHECK(pm_motor_is_running(&m2) == false);
+
+    CHECK(pm_motor_deinit(&m1) == PM_OK);
+    CHECK(mock_pwm_duty(0u) == 0u);
+    CHECK(mock_pwm_duty(1u) == 0u);
+    CHECK(pm_motor_deinit(&m1) == PM_OK);               /* idempotent */
+    CHECK(pm_motor_set(&m1, 100u, PM_MOTOR_DIR_FORWARD) == PM_ERR_STATE);
+}
+#endif /* PM_ENABLE_MOTOR */
+
 int main(void)
 {
     test_ringbuf();
@@ -1511,6 +1668,9 @@ int main(void)
 #endif
 #if defined(PM_ENABLE_RELAY)
     test_relay();
+#endif
+#if defined(PM_ENABLE_MOTOR)
+    test_motor();
 #endif
 
     printf("\n%d checks, %d failure(s)\n", s_checks, s_failures);
