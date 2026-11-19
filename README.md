@@ -475,6 +475,12 @@ python3 tools/check_layering.py . --roles .arch-roles
 | 固件构建 | ubuntu-latest | `gcc-arm-none-eabi` + CMake/Ninja 构建 `pm_f103_demo` |
 | 四层架构检查 | ubuntu-latest | 先 `--version --lock` 校验无漂移，再扫描；任一步非零即失败 |
 
+**项目约定：编译告警即错误，不许为"编过"关掉。** 主机单测用 `/W4`（MSVC）或
+`-Wall -Wextra -Wshadow -Werror`（GCC），固件构建同样把隐式声明当错误。v0.5 就有一个
+真实例子：`pm_port_stm32f1.c` 用了 `memset` 但漏 `#include <string.h>`，被
+`implicit-function-declaration` 挡下才没有进版本。这类漏 include 在"能编过"的宽松配置下
+只表现为未定义行为，**告警开关是唯一防线**，任何 PR 都不得关闭或降级这类选项。
+
 ---
 
 ## 已知限制

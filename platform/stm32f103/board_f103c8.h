@@ -68,7 +68,7 @@ typedef enum {
 
 /* Logical timer ids, used by pm_timer.h claims and by the PWM timer table.
  * TIM2 has no remap option for PA0/PA1 on this package, so motor PWM and a
- * free-running TIM2 counter cannot coexist (docs/00-contract.md section 18). */
+ * free-running TIM2 counter cannot coexist (docs/00-contract.md section 20). */
 typedef enum {
     BOARD_TIM_2 = 0,
     BOARD_TIM_3,

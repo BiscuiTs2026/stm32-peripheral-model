@@ -1826,7 +1826,7 @@ static const pm_pwm_ops_t s_pwm_ops = {
 #if defined(PM_ENABLE_TONE)
 /* ------------------------------------------------------------------ TONE */
 /*
- * Port implementation detail, not part of the public contract (section 15):
+ * Port implementation detail, not part of the public contract (section 17):
  *  - one update interrupt every 10 us, PSC derived from the APB1 timer clock;
  *  - period_ticks = 100000 / freq_hz;
  *  - duty_ticks   = period_ticks * permille / 1000, quantised to whole ticks.
