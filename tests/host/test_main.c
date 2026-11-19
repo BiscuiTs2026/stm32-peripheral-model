@@ -33,6 +33,9 @@
 #if defined(PM_ENABLE_ENCODER)
 #include "pm_encoder.h"
 #endif
+#if defined(PM_ENABLE_RELAY)
+#include "pm_relay.h"
+#endif
 #include "pm_timer.h"
 #include "pm_port_mock.h"
 
@@ -1389,6 +1392,78 @@ static void test_encoder(void)
 }
 #endif /* PM_ENABLE_ENCODER */
 
+#if defined(PM_ENABLE_RELAY)
+static void test_relay(void)
+{
+    pm_relay_t a;
+    pm_relay_t b;
+    pm_relay_cfg_t cfg;
+
+    mock_reset();
+    memset(&a, 0, sizeof(a));
+    memset(&b, 0, sizeof(b));
+
+    CHECK(pm_relay_init(NULL, &cfg) == PM_ERR_NULL);
+    CHECK(pm_relay_init(&a, NULL) == PM_ERR_NULL);
+
+    /* A zero-initialised config carries UNSET: rejected, never defaulted. */
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.pin.id = 0u;
+    CHECK(cfg.active_level == PM_RELAY_ACTIVE_UNSET);
+    CHECK(pm_relay_init(&a, &cfg) == PM_ERR_PARAM);
+    CHECK(mock_gpio_is_configured(0u) == 0);
+
+    /* Unknown pin is a range error, not a silent no-op. */
+    cfg.pin.id = MOCK_GPIO_COUNT;
+    cfg.active_level = PM_RELAY_ACTIVE_HIGH;
+    CHECK(pm_relay_init(&a, &cfg) == PM_ERR_RANGE);
+
+    /* Active-high on pin 0: init must leave it de-energised (low). */
+    cfg.pin.id = 0u;
+    CHECK(pm_relay_init(&a, &cfg) == PM_OK);
+    CHECK(mock_gpio_level(0u) == PM_GPIO_LEVEL_LOW);
+    CHECK(pm_relay_is_on(&a) == false);
+    CHECK(pm_relay_init(&a, &cfg) == PM_ERR_BUSY);
+
+    CHECK(pm_relay_on(&a) == PM_OK);
+    CHECK(mock_gpio_level(0u) == PM_GPIO_LEVEL_HIGH);
+    CHECK(pm_relay_is_on(&a) == true);
+    CHECK(pm_relay_toggle(&a) == PM_OK);
+    CHECK(mock_gpio_level(0u) == PM_GPIO_LEVEL_LOW);
+    CHECK(pm_relay_set(&a, true) == PM_OK);
+    CHECK(pm_relay_is_on(&a) == true);
+    CHECK(pm_relay_off(&a) == PM_OK);
+    CHECK(mock_gpio_level(0u) == PM_GPIO_LEVEL_LOW);
+
+    /* Active-low on pin 1: same API, inverted electrical level. */
+    cfg.pin.id = 1u;
+    cfg.active_level = PM_RELAY_ACTIVE_LOW;
+    CHECK(pm_relay_init(&b, &cfg) == PM_OK);
+    CHECK(mock_gpio_level(1u) == PM_GPIO_LEVEL_HIGH);   /* inactive = high */
+    CHECK(pm_relay_on(&b) == PM_OK);
+    CHECK(mock_gpio_level(1u) == PM_GPIO_LEVEL_LOW);    /* active = low */
+    CHECK(pm_relay_is_on(&b) == true);
+
+    /* Two instances, interleaved: each keeps its own state and pin. */
+    CHECK(pm_relay_on(&a) == PM_OK);
+    CHECK(mock_gpio_level(0u) == PM_GPIO_LEVEL_HIGH);
+    CHECK(mock_gpio_level(1u) == PM_GPIO_LEVEL_LOW);    /* B untouched */
+    CHECK(pm_relay_off(&b) == PM_OK);
+    CHECK(mock_gpio_level(0u) == PM_GPIO_LEVEL_HIGH);   /* A untouched */
+    CHECK(pm_relay_is_on(&b) == false);
+    CHECK(pm_relay_is_on(&a) == true);
+
+    /* Deinit is fail-safe: the load goes back to the inactive level. */
+    CHECK(pm_relay_on(&b) == PM_OK);
+    CHECK(pm_relay_deinit(&a) == PM_OK);
+    CHECK(mock_gpio_level(0u) == PM_GPIO_LEVEL_LOW);
+    CHECK(pm_relay_is_on(&a) == false);
+    CHECK(pm_relay_deinit(&a) == PM_OK);                /* idempotent */
+    CHECK(pm_relay_on(&a) == PM_ERR_STATE);             /* no longer usable */
+    CHECK(pm_relay_is_on(&b) == true);                  /* B still alive */
+}
+#endif /* PM_ENABLE_RELAY */
+
 int main(void)
 {
     test_ringbuf();
@@ -1433,6 +1508,9 @@ int main(void)
 #endif
 #if defined(PM_ENABLE_ENCODER)
     test_encoder();
+#endif
+#if defined(PM_ENABLE_RELAY)
+    test_relay();
 #endif
 
     printf("\n%d checks, %d failure(s)\n", s_checks, s_failures);

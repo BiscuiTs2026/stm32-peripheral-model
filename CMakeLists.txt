@@ -15,7 +15,7 @@ set(PM_PLATFORM ${PM_ROOT}/platform/stm32f103)
 # exist. This keeps the historical batches (v0.1 GPIO+UART, v0.2 +SPI,
 # v0.3 +I2C, v0.4 +ADC/PWM) independently buildable without keeping hand-made
 # copies of older CMakeLists: the files themselves are the switch.
-set(PM_MODULE_NAMES  spi i2c adc pwm tone track encoder)
+set(PM_MODULE_NAMES  spi i2c adc pwm tone track encoder relay)
 set(PM_MODULE_SOURCES "")
 set(PM_MODULE_DEFS "")
 foreach(mod ${PM_MODULE_NAMES})
