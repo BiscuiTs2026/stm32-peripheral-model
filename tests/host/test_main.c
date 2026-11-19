@@ -1124,6 +1124,16 @@ static void test_pwm_math(void)
 
 /* ------------------------------------------------------- timer arbitration */
 
+static uint32_t s_probe_busy_id;
+static int      s_probe_calls;
+
+static bool timer_probe(void *ctx, uint8_t hw_id)
+{
+    PM_UNUSED(ctx);
+    s_probe_calls++;
+    return hw_id == (uint8_t)s_probe_busy_id;
+}
+
 static void test_timer_arbiter(void)
 {
     pm_timer_claim_t pwm0;
@@ -1231,6 +1241,54 @@ static void test_timer_arbiter(void)
         c.psc = 0u;
         c.arr = 99u;
         CHECK(pm_timer_claim(&c) == PM_ERR_CONFLICT);
+    }
+
+    /* External occupancy: a timer started by code that never called this API
+       (the board reads TIM2->CNT for echo while the motor runs) must be
+       refused, not silently reconfigured. */
+    pm_timer_reset();
+    s_probe_busy_id = 5u;
+    s_probe_calls   = 0;
+    pm_timer_set_probe(timer_probe, NULL);
+    {
+        pm_timer_claim_t busy = pwm0;
+
+        busy.hw_id    = 5u;
+        busy.owner_id = 3u;
+        CHECK(pm_timer_check(&busy) == PM_ERR_CONFLICT);   /* dry run sees it */
+        CHECK(pm_timer_claim(&busy) == PM_ERR_CONFLICT);
+        CHECK(pm_timer_claims(5u) == 0u);                  /* nothing recorded */
+
+        /* Idle timer on the same run goes through. */
+        busy.hw_id = 4u;
+        CHECK(pm_timer_claim(&busy) == PM_OK);
+        CHECK(pm_timer_claims(4u) == 1u);
+    }
+
+    /* Once the model owns the timer it is legitimately busy (the probe watches
+       CR1.CEN). The probe must not fire again or siblings would be refused. */
+    s_probe_busy_id = 4u;
+    s_probe_calls   = 0;
+    {
+        pm_timer_claim_t sib = pwm0;
+
+        sib.hw_id    = 4u;
+        sib.owner_id = 6u;
+        sib.channels = 0x02u;
+        CHECK(pm_timer_claim(&sib) == PM_OK);
+        CHECK(pm_timer_claims(4u) == 2u);
+        CHECK(s_probe_calls == 0);
+    }
+
+    /* pm_timer_reset() uninstalls the probe as well (power-on state). */
+    pm_timer_reset();
+    s_probe_busy_id = 4u;
+    {
+        pm_timer_claim_t c = pwm0;
+
+        c.hw_id    = 4u;
+        c.owner_id = 3u;
+        CHECK(pm_timer_claim(&c) == PM_OK);
     }
     pm_timer_reset();
 }

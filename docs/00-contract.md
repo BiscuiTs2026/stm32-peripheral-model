@@ -942,6 +942,8 @@ AB = `A << 1 | B`，数值序 00 / 01 / 10 / 11。合法相邻状态每边沿 ±
   返回 `PM_ERR_CONFLICT`。
 - 所有失败路径（含 HAL 初始化失败）都必须 `pm_timer_release()`，不留脏声明。
 - 表是固定的 8 条静态表，`claim`/`release` 在主循环调用，不在 ISR 里调用。
+- 占用表只能看见"经本模型申请"的占用；裸用寄存器的代码看不见。端口必须提供外部占用
+  探测，见 20.7。
 
 ### 20.3 判据（写死，不靠实现推断）
 
@@ -985,6 +987,37 @@ AB = `A << 1 | B`，数值序 00 / 01 / 10 / 11。合法相邻状态每边沿 ±
   返回 `PM_ERR_NOMEM`。
 - 板上：舵机（TIM4）+ 音调（TIM3）应同时可用；把音调的 `hw_id` 改成 TIM4 再 `init`
   → 期望 `PM_ERR_CONFLICT`。【待实测】
+
+### 20.7 外部占用探测（v0.6 新增）
+
+**问题**：占用表只记"经模型申请"的占用。板端 `pm_motor_stm32f1.c:33` 只查
+`TIM2->CR1.CEN` 就接管 TIM2，`main.c` 的测距 ISR 也只读 `TIM2->CNT`。这类**裸占用
+不经过本 API**，表里是空的；若模型此时直接写 PSC/ARR，就重现 20.1 的事故。
+
+**硬性要求**：端口必须提供一条探测：
+
+```c
+typedef bool (*pm_timer_probe_fn)(void *ctx, uint8_t hw_id);
+void pm_timer_set_probe(pm_timer_probe_fn fn, void *ctx);
+```
+
+| 项 | 判据（写死） |
+| --- | --- |
+| 探测输入 | 逻辑定时器号 `hw_id`（与 `claim` 同一个编号体系） |
+| 返回 `true` | 该定时器已被**非本模型代码**启动或重配 |
+| 副作用 | 只读寄存器，不许写；不许清标志、不许停计数 |
+| 安装者 | 端口；核心不碰硬件 |
+| 撤销 | `pm_timer_set_probe(NULL, NULL)`；`pm_timer_reset()` 一并撤销 |
+
+- **探测时机**：仅当该 `hw_id` 在表里**没有任何 live claim** 时调用。一旦模型自己已经
+  启动时基，`CR1.CEN` 是模型置的，再探测会把自家兄弟通道判成外部占用。
+- **返回值**：探测为 `true` → `pm_timer_claim()` 与 `pm_timer_check()` 都返回
+  `PM_ERR_CONFLICT`，**表不变、寄存器不变**。不静默接管，也不自动降级。
+- **本板实现**（`pm_port_stm32f1.c`）：`hw_id` 0/1/2 对应 TIM2/TIM3/TIM4；判据为
+  `TIMx->CR1.CEN != 0` 或 `AFIO->MAPR` 对应重映射位非 0；未知 `hw_id` 一律返回 `true`
+  （不认识就不接管）。该探测在 `pm_port_get()` 里安装一次。
+- 与 20.5 的关系：外部占用属于 `PM_ERR_CONFLICT`（可修：先让对方释放/停用），不是
+  `PM_ERR_DISABLED`（那是指功能被设计性关闭）。
 
 ---
 

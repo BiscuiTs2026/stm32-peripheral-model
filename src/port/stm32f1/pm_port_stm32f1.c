@@ -1412,6 +1412,43 @@ static uint32_t f1_apb1_timer_clock(void)
                                                                   : (pclk1 * 2u));
 }
 
+#if defined(PM_ENABLE_PWM) || defined(PM_ENABLE_TONE)
+/* Non-model firmware on this board drives timers directly: the echo reader in
+ * main.c polls TIM2->CNT while the motor runs, and a CubeMX-style init may have
+ * remapped a timer to other pins. Both leave a mark that needs no cooperation
+ * from the other driver: a running counter (CR1.CEN) or a non-zero AFIO remap.
+ * Reading registers only; the probe never writes.
+ * timer_index follows board_timer_id_t: 0 = TIM2, 1 = TIM3, 2 = TIM4. */
+static bool f1_timer_externally_busy(void *ctx, uint8_t hw_id)
+{
+    TIM_TypeDef *inst;
+    uint32_t     remap_mask;
+
+    (void)ctx;
+    switch (hw_id) {
+    case 0u:
+        inst       = TIM2;
+        remap_mask = 0x00000300u;   /* AFIO_MAPR TIM2_REMAP[1:0] */
+        break;
+    case 1u:
+        inst       = TIM3;
+        remap_mask = 0x00000C00u;   /* AFIO_MAPR TIM3_REMAP[1:0] */
+        break;
+    case 2u:
+        inst       = TIM4;
+        remap_mask = 0x00001000u;   /* AFIO_MAPR TIM4_REMAP */
+        break;
+    default:
+        return true;                /* unknown timer: never take it over */
+    }
+
+    if ((inst->CR1 & TIM_CR1_CEN) != 0u) {
+        return true;
+    }
+    return (AFIO->MAPR & remap_mask) != 0u;
+}
+#endif
+
 #if defined(PM_ENABLE_PWM)
 /* ------------------------------------------------------------------- PWM */
 
@@ -2405,5 +2442,10 @@ static const pm_port_t s_port = {
 
 const pm_port_t *pm_port_get(void)
 {
+#if defined(PM_ENABLE_PWM) || defined(PM_ENABLE_TONE)
+    /* Lets pm_timer_claim() see timers started outside the model. Idempotent;
+     * pm_port_stm32f1.c is the only port in this repository. */
+    pm_timer_set_probe(f1_timer_externally_busy, NULL);
+#endif
     return &s_port;
 }

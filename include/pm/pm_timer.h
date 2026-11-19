@@ -15,6 +15,9 @@
  *      * everything else: one owner per timer.
  *  - An incompatible request returns PM_ERR_CONFLICT. Nothing is modified.
  *  - Releasing is mandatory in deinit/close, including on the error path.
+ *  - The table only sees code that uses this API. Firmware that starts a
+ *    timer on its own is invisible, so the port installs a probe (see
+ *    pm_timer_set_probe) and a busy timer is refused, never taken over.
  *
  * The table is static, fixed-size and interrupt-safe with respect to
  * single-word writes only; claim/release are meant to run in the main loop.
@@ -61,10 +64,30 @@ pm_err_t pm_timer_retime(uint8_t hw_id, uint8_t owner_id, uint16_t psc, uint16_t
  * a dry run before touching hardware. */
 pm_err_t pm_timer_check(const pm_timer_claim_t *claim);
 
+/* External occupancy probe. Returns true when the timer is already started or
+ * reconfigured by code outside this model (a hand-written CR1.CEN check, a
+ * CubeMX init, a legacy driver). The port installs one; it is a pure read of
+ * registers and must not change them.
+ *
+ * The probe is consulted only while the timer has no live claim. Once the
+ * model itself has started the time base, a CEN-based probe would flag our own
+ * sibling channels, so it is skipped from then on.
+ *
+ * A busy probe makes pm_timer_claim() and pm_timer_check() return
+ * PM_ERR_CONFLICT without writing anything. The model never takes a timer over
+ * silently (see docs/00-contract.md section 20.7). */
+typedef bool (*pm_timer_probe_fn)(void *ctx, uint8_t hw_id);
+
+/* Installs (fn != NULL) or removes (fn == NULL) the probe. Called by the port;
+ * the core keeps no knowledge of the hardware. */
+void pm_timer_set_probe(pm_timer_probe_fn fn, void *ctx);
+
 /* Number of live claims on a timer (0 = free). */
 uint8_t pm_timer_claims(uint8_t hw_id);
 
-/* Clears the whole table. Only for test setup and full re-initialisation. */
+/* Clears the whole table and uninstalls the probe (power-on state). Only for
+ * test setup and full re-initialisation; the port must re-install its probe
+ * afterwards. */
 void pm_timer_reset(void);
 
 #endif /* PM_TIMER_H */

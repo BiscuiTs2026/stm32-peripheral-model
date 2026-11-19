@@ -18,6 +18,14 @@ typedef struct {
 } pm_timer_entry_t;
 
 static pm_timer_entry_t s_claims[PM_TIMER_CLAIM_MAX];
+static pm_timer_probe_fn s_probe;
+static void             *s_probe_ctx;
+
+void pm_timer_set_probe(pm_timer_probe_fn fn, void *ctx)
+{
+    s_probe     = fn;
+    s_probe_ctx = ctx;
+}
 
 static bool claim_valid(const pm_timer_claim_t *c)
 {
@@ -60,6 +68,7 @@ static pm_err_t check_locked(const pm_timer_claim_t *claim)
 {
     uint8_t i;
     uint8_t free_slot = PM_TIMER_CLAIM_MAX;
+    uint8_t live = 0u;
     const pm_timer_entry_t *owner = NULL;
 
     if (claim == NULL) {
@@ -78,16 +87,25 @@ static pm_err_t check_locked(const pm_timer_claim_t *claim)
             }
             continue;
         }
-        if ((e->hw_id == claim->hw_id) && (e->owner_id == claim->owner_id)) {
-            owner = e;
+        if (e->hw_id != claim->hw_id) {
             continue;
         }
-        if (e->hw_id != claim->hw_id) {
+        live++;
+        if (e->owner_id == claim->owner_id) {
+            owner = e;
             continue;
         }
         if (!compatible(e, claim)) {
             return PM_ERR_CONFLICT;
         }
+    }
+
+    /* Nothing in the table knows this timer: ask the port whether somebody
+     * outside the model already runs it. Only then, because once our own claim
+     * exists the hardware is legitimately busy and the probe would flag us. */
+    if ((live == 0u) && (s_probe != NULL) &&
+        s_probe(s_probe_ctx, claim->hw_id)) {
+        return PM_ERR_CONFLICT;
     }
 
     if (owner != NULL) {
@@ -212,4 +230,6 @@ uint8_t pm_timer_claims(uint8_t hw_id)
 void pm_timer_reset(void)
 {
     (void)memset(s_claims, 0, sizeof(s_claims));
+    s_probe     = NULL;
+    s_probe_ctx = NULL;
 }
