@@ -15,8 +15,12 @@
  *  - pm_encoder_reset() must be called while the shaft is still, otherwise
  *    one in-flight edge can land after the reset (documented, not hidden).
  *  - `invert` swaps A and B for boards where the encoder is wired backwards.
- *  - On this board PA8/PA9 are the encoder inputs; PB15 is the encoder push
- *    button and is NOT part of this module (it shares SPI2_MOSI).
+ *  - The push button is OPTIONAL. `pm_encoder_cfg_t.has_button` defaults to 0
+ *    and the model then never touches a button pin: init still succeeds and
+ *    pm_encoder_button() answers PM_ERR_DISABLED. Nothing assumes the module
+ *    has an SW pin.
+ *  - On this board PA8/PA9 are the encoder inputs; the push button shares
+ *    SPI2_MOSI (PB15) and is therefore left unconfigured in the pin table.
  */
 #ifndef PM_ENCODER_H
 #define PM_ENCODER_H
@@ -30,14 +34,16 @@ struct pm_encoder {
     uint8_t  state;
     uint8_t  hw_id;
     uint8_t  invert;
+    uint8_t  has_button;       /* 1 when cfg.has_button was non-zero */
     uint8_t  last_ab;          /* last 2-bit state, bit1 = A, bit0 = B */
     volatile int32_t count;    /* updated only from the edge ISR */
     const pm_encoder_ops_t *ops;
     void                   *port_ctx;
 };
 
-/* Opens the two pins. Returns PM_ERR_RANGE for an unknown hw_id and
- * PM_ERR_BUSY when the object is already open. */
+/* Opens the two pins. Returns PM_ERR_RANGE for an unknown hw_id,
+ * PM_ERR_BUSY when the object is already open, and PM_ERR_DISABLED when a
+ * button is requested but the port has no read_button() implementation. */
 pm_err_t pm_encoder_init(pm_encoder_t *e, const pm_encoder_cfg_t *cfg);
 
 /* Stops counting and releases the pins. Idempotent. */
@@ -51,6 +57,16 @@ pm_err_t pm_encoder_reset(pm_encoder_t *e);
 
 /* Last raw AB state (bit1 = A, bit0 = B), 0 when not initialized. */
 uint8_t pm_encoder_last_ab(const pm_encoder_t *e);
+
+/* True only when the object is open AND cfg.has_button was non-zero, i.e. the
+ * module really has a push button. False for an uninitialised object. */
+bool pm_encoder_has_button(const pm_encoder_t *e);
+
+/* Reads the optional push button. true = pressed.
+ * PM_ERR_NULL  : e or pressed is NULL
+ * PM_ERR_STATE : not initialised
+ * PM_ERR_DISABLED : no button on this module; that is an answer, not a fault */
+pm_err_t pm_encoder_button(pm_encoder_t *e, bool *pressed);
 
 /* Port -> core hook. Must be called from the pin edge ISR with the new
  * 2-bit state, bit1 = A, bit0 = B. Safe to call when uninitialised. */

@@ -2323,6 +2323,12 @@ static pm_err_t f1_encoder_open(void *ctx, pm_encoder_t *e,
         (pins->b_port == NULL) || (pins->b_pin == 0u)) {
         return PM_ERR_PARAM;
     }
+    /* Validate the optional button before touching any pin, so a rejected
+     * request leaves the A/B inputs untouched. */
+    if ((cfg->has_button != 0u) &&
+        ((pins->button_port == NULL) || (pins->button_pin == 0u))) {
+        return PM_ERR_PARAM;
+    }
 
     gpio_clk_enable(pins->a_port);
     gpio_clk_enable(pins->b_port);
@@ -2333,6 +2339,16 @@ static pm_err_t f1_encoder_open(void *ctx, pm_encoder_t *e,
     HAL_GPIO_Init(pins->a_port, &init);
     init.Pin   = pins->b_pin;
     HAL_GPIO_Init(pins->b_port, &init);
+
+    if (cfg->has_button != 0u) {
+        /* KY-040 SW closes to GND; the pull-up is what defines "pressed". */
+        gpio_clk_enable(pins->button_port);
+        init.Mode  = GPIO_MODE_INPUT;
+        init.Pull  = GPIO_PULLUP;
+        init.Speed = GPIO_SPEED_FREQ_LOW;
+        init.Pin   = pins->button_pin;
+        HAL_GPIO_Init(pins->button_port, &init);
+    }
 
     /* Drop any stale pending bit before the interrupt is enabled. */
     EXTI->PR = (uint32_t)(pins->a_pin | pins->b_pin);
@@ -2361,9 +2377,35 @@ static void f1_encoder_close(void *ctx, pm_encoder_t *e)
     HAL_NVIC_DisableIRQ(c->pins[e->hw_id].irqn);
     HAL_GPIO_DeInit(c->pins[e->hw_id].a_port, c->pins[e->hw_id].a_pin);
     HAL_GPIO_DeInit(c->pins[e->hw_id].b_port, c->pins[e->hw_id].b_pin);
+    if (e->has_button != 0u) {
+        HAL_GPIO_DeInit(c->pins[e->hw_id].button_port,
+                        c->pins[e->hw_id].button_pin);
+    }
 
     s_encoder[e->hw_id].owner  = NULL;
     s_encoder[e->hw_id].opened = 0u;
+}
+
+static pm_err_t f1_encoder_read_button(void *ctx, pm_encoder_t *e,
+                                       bool *pressed)
+{
+    const pm_f1_encoder_ctx_t  *c = (const pm_f1_encoder_ctx_t *)ctx;
+    const pm_f1_encoder_pins_t *pins;
+
+    if ((c == NULL) || (e == NULL) || (pressed == NULL)) {
+        return PM_ERR_NULL;
+    }
+    if ((e->hw_id >= PM_F1_ENCODER_COUNT) || (e->hw_id >= c->count)) {
+        return PM_ERR_RANGE;
+    }
+    pins = &c->pins[e->hw_id];
+    if ((pins->button_port == NULL) || (pins->button_pin == 0u)) {
+        return PM_ERR_DISABLED;
+    }
+
+    *pressed = (HAL_GPIO_ReadPin(pins->button_port, pins->button_pin) ==
+                GPIO_PIN_RESET);
+    return PM_OK;
 }
 
 /* PA8/PA9 share EXTI9_5. Both edges of both pins call the core hook. */
@@ -2388,8 +2430,9 @@ void EXTI9_5_IRQHandler(void)
 }
 
 static const pm_encoder_ops_t s_encoder_ops = {
-    .open  = f1_encoder_open,
-    .close = f1_encoder_close,
+    .open        = f1_encoder_open,
+    .close       = f1_encoder_close,
+    .read_button = f1_encoder_read_button,
 };
 
 #endif /* PM_ENABLE_ENCODER */

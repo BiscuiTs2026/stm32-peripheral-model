@@ -296,6 +296,7 @@ typedef struct {
 typedef struct {
     uint8_t hw_id;
     uint8_t invert;
+    uint8_t has_button;   /* 0 = no push button on this module (the norm) */
 } pm_encoder_cfg_t;
 
 typedef struct pm_encoder pm_encoder_t;
@@ -303,10 +304,18 @@ typedef struct pm_encoder pm_encoder_t;
 typedef struct {
     /* open() configures both inputs and the edge interrupt, and reports the
      * AB state it found so the core can adopt it without counting a step.
-     * Edges are delivered to the core with pm_encoder_hw_edge(). */
+     * Edges are delivered to the core with pm_encoder_hw_edge().
+     * When cfg->has_button != 0, open() also configures the button input and
+     * the port must provide read_button(); an unsupported combination is
+     * rejected by the core with PM_ERR_DISABLED. */
     pm_err_t (*open)(void *ctx, pm_encoder_t *e, const pm_encoder_cfg_t *cfg,
                      uint8_t *initial_ab);
     void     (*close)(void *ctx, pm_encoder_t *e);
+
+    /* Optional. Only called when the button was configured. Returns the
+     * logical state (true = pressed); the port owns the electrical
+     * convention because it chose the pull. NULL when there is no button. */
+    pm_err_t (*read_button)(void *ctx, pm_encoder_t *e, bool *pressed);
 } pm_encoder_ops_t;
 
 /* ----------------------------------------------------------- port registry */

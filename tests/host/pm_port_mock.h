@@ -78,8 +78,9 @@ void            mock_track_set_level(uint8_t hw_id, pm_gpio_level_t level);
 int             mock_track_is_open(uint8_t hw_id);
 
 /* Encoder: the AB state the port reports at open. Edges are injected with
- * pm_encoder_hw_edge() directly by the test. */
+ * pm_encoder_hw_edge() directly by the test. The optional button is polled. */
 void            mock_encoder_set_initial_ab(uint8_t hw_id, uint8_t ab);
+void            mock_encoder_set_button(uint8_t hw_id, int pressed);
 int             mock_encoder_is_open(uint8_t hw_id);
 
 #endif /* PM_PORT_MOCK_H */

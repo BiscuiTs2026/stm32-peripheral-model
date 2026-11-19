@@ -45,12 +45,19 @@ pm_err_t pm_encoder_init(pm_encoder_t *e, const pm_encoder_cfg_t *cfg)
     if (cfg->hw_id >= port->encoder_count) {
         return PM_ERR_RANGE;
     }
+    /* The button is an optional capability: asking for one the port cannot
+     * read is a design error, but not asking is the normal case and must not
+     * fail (docs/00-contract.md section 19.6). */
+    if ((cfg->has_button != 0u) && (port->encoder->read_button == NULL)) {
+        return PM_ERR_DISABLED;
+    }
 
     (void)memset(e, 0, sizeof(*e));
-    e->hw_id    = cfg->hw_id;
-    e->invert   = (cfg->invert != 0u) ? 1u : 0u;
-    e->ops      = port->encoder;
-    e->port_ctx = port->encoder_ctx;
+    e->hw_id      = cfg->hw_id;
+    e->invert     = (cfg->invert != 0u) ? 1u : 0u;
+    e->has_button = (cfg->has_button != 0u) ? 1u : 0u;
+    e->ops        = port->encoder;
+    e->port_ctx   = port->encoder_ctx;
 
     rc = e->ops->open(e->port_ctx, e, cfg, &initial_ab);
     if (rc != PM_OK) {
@@ -106,6 +113,29 @@ uint8_t pm_encoder_last_ab(const pm_encoder_t *e)
         return 0u;
     }
     return e->last_ab;
+}
+
+bool pm_encoder_has_button(const pm_encoder_t *e)
+{
+    if ((e == NULL) || (e->state != PM_ENCODER_STATE_READY)) {
+        return false;
+    }
+    return e->has_button != 0u;
+}
+
+pm_err_t pm_encoder_button(pm_encoder_t *e, bool *pressed)
+{
+    if ((e == NULL) || (pressed == NULL)) {
+        return PM_ERR_NULL;
+    }
+    if (e->state != PM_ENCODER_STATE_READY) {
+        return PM_ERR_STATE;
+    }
+    if (e->has_button == 0u) {
+        *pressed = false;
+        return PM_ERR_DISABLED;
+    }
+    return e->ops->read_button(e->port_ctx, e, pressed);
 }
 
 void pm_encoder_hw_edge(pm_encoder_t *e, uint8_t ab)

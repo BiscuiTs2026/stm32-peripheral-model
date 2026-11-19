@@ -1402,6 +1402,7 @@ static void test_encoder(void)
     memset(&e, 0, sizeof(e));
     cfg.hw_id = 0u;
     cfg.invert = 0u;
+    cfg.has_button = 0u;
 
     CHECK(pm_encoder_init(NULL, &cfg) == PM_ERR_NULL);
     CHECK(pm_encoder_init(&e, NULL) == PM_ERR_NULL);
@@ -1450,6 +1451,39 @@ static void test_encoder(void)
     CHECK(pm_encoder_deinit(&e) == PM_OK);
     CHECK(pm_encoder_count(&e) == 0);
     CHECK(pm_encoder_reset(&e) == PM_ERR_STATE);
+
+    /* Optional push button: absent by default, never an error. */
+    {
+        bool pressed = true;
+
+        CHECK(pm_encoder_has_button(&e) == false);
+        CHECK(pm_encoder_button(NULL, &pressed) == PM_ERR_NULL);
+        CHECK(pm_encoder_button(&e, NULL) == PM_ERR_NULL);
+        CHECK(pm_encoder_button(&e, &pressed) == PM_ERR_STATE);
+        CHECK(pressed == true);          /* untouched while uninitialised */
+
+        cfg.invert     = 0u;
+        cfg.has_button = 0u;
+        CHECK(pm_encoder_init(&e, &cfg) == PM_OK);
+        CHECK(pm_encoder_has_button(&e) == false);
+        CHECK(pm_encoder_button(&e, &pressed) == PM_ERR_DISABLED);
+        CHECK(pressed == false);         /* a defined answer, not a fault */
+        CHECK(pm_encoder_deinit(&e) == PM_OK);
+        CHECK(pm_encoder_has_button(&e) == false);
+
+        /* Configured: the state is really read from the port. */
+        cfg.has_button = 1u;
+        mock_encoder_set_button(0u, 1);
+        CHECK(pm_encoder_init(&e, &cfg) == PM_OK);
+        CHECK(pm_encoder_has_button(&e) == true);
+        CHECK(pm_encoder_button(&e, &pressed) == PM_OK);
+        CHECK(pressed == true);
+        mock_encoder_set_button(0u, 0);
+        CHECK(pm_encoder_button(&e, &pressed) == PM_OK);
+        CHECK(pressed == false);
+        CHECK(pm_encoder_deinit(&e) == PM_OK);
+        CHECK(pm_encoder_has_button(&e) == false);
+    }
 }
 #endif /* PM_ENABLE_ENCODER */
 

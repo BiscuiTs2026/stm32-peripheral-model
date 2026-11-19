@@ -687,6 +687,7 @@ static const pm_track_ops_t s_track_ops = {
 
 static uint8_t s_encoder_open[MOCK_ENCODER_COUNT];
 static uint8_t s_encoder_ab[MOCK_ENCODER_COUNT];
+static uint8_t s_encoder_button[MOCK_ENCODER_COUNT];
 
 static pm_err_t mock_encoder_open(void *ctx, pm_encoder_t *e,
                                   const pm_encoder_cfg_t *cfg,
@@ -716,9 +717,25 @@ static void mock_encoder_close(void *ctx, pm_encoder_t *e)
     }
 }
 
+static pm_err_t mock_encoder_read_button(void *ctx, pm_encoder_t *e,
+                                         bool *pressed)
+{
+    (void)ctx;
+
+    if ((e == NULL) || (pressed == NULL)) {
+        return PM_ERR_NULL;
+    }
+    if (e->hw_id >= MOCK_ENCODER_COUNT) {
+        return PM_ERR_RANGE;
+    }
+    *pressed = (s_encoder_button[e->hw_id] != 0u);
+    return PM_OK;
+}
+
 static const pm_encoder_ops_t s_encoder_ops = {
-    .open  = mock_encoder_open,
-    .close = mock_encoder_close,
+    .open        = mock_encoder_open,
+    .close       = mock_encoder_close,
+    .read_button = mock_encoder_read_button,
 };
 
 #endif /* PM_ENABLE_ENCODER */
@@ -845,6 +862,7 @@ void mock_reset(void)
 #if defined(PM_ENABLE_ENCODER)
     memset(s_encoder_open, 0, sizeof(s_encoder_open));
     memset(s_encoder_ab, 0, sizeof(s_encoder_ab));
+    memset(s_encoder_button, 0, sizeof(s_encoder_button));
 #endif
 }
 
@@ -1082,6 +1100,13 @@ void mock_encoder_set_initial_ab(uint8_t hw_id, uint8_t ab)
 int mock_encoder_is_open(uint8_t hw_id)
 {
     return (hw_id < MOCK_ENCODER_COUNT) ? (int)s_encoder_open[hw_id] : 0;
+}
+
+void mock_encoder_set_button(uint8_t hw_id, int pressed)
+{
+    if (hw_id < MOCK_ENCODER_COUNT) {
+        s_encoder_button[hw_id] = (pressed != 0) ? 1u : 0u;
+    }
 }
 
 #endif /* PM_ENABLE_ENCODER */

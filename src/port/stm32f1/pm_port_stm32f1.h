@@ -120,13 +120,18 @@ typedef struct {
 
 extern const pm_f1_track_ctx_t pm_f1_track_ctx;
 
-/* Quadrature encoder pin pair. Both pins use the same EXTI line group. */
+/* Quadrature encoder pin pair. Both pins use the same EXTI line group.
+ * The optional push button has no interrupt path: it is polled through
+ * read_button(). Leave button_port/button_pin at 0 when the module has no SW
+ * pin (this board: PB15 is SPI2_MOSI). */
 typedef struct {
     GPIO_TypeDef *a_port;
     uint16_t      a_pin;
     GPIO_TypeDef *b_port;
     uint16_t      b_pin;
     IRQn_Type     irqn;
+    GPIO_TypeDef *button_port;
+    uint16_t      button_pin;
 } pm_f1_encoder_pins_t;
 
 typedef struct {
