@@ -217,47 +217,49 @@ third_party/            CMSIS 与 ST HAL 子集（BSD-3-Clause，原样分发）
 
 ## 接进已有工程
 
-三个约定先记住：
-
-1. **包含路径是 `-Iinclude/pm`，不是 `-Iinclude`**。公开头之间用 `#include "pm_common.h"`
-   这类同目录写法，必须把 `${PM_ROOT}/include/pm` 加进 include path；`${PM_ROOT}/include`
-   一并加上（个别头会引用它）。
-2. **要编译的目录**：`src/common/`（纯逻辑）、`src/core/`（模型）、`src/osal/`（时间与临界区）、
-   `src/port/stm32f1/`（HAL 后端）与 `platform/stm32f103/`（引脚表等）。
-3. **两处接缝要实现**：`pm_port_get()` 返回各外设的 ops 表（定义见 `include/pm/pm_port.h`）；
-   OSAL 直接用 `src/osal/pm_osal_port_cm3.c`（Cortex-M3），换架构另写一份
-   （`pm_osal_*` 契约见 `docs/00-contract.md` §9）。
-
-CMake 最小集成（假设本仓 vendored 到 `third_party/stm32-peripheral-model`）：
+推荐路径：把本仓 vendored 到 `third_party/stm32-peripheral-model`，然后两行：
 
 ```cmake
-set(PM_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/stm32-peripheral-model")
-
-file(GLOB PM_CORE   ${PM_ROOT}/src/core/*.c)
-file(GLOB PM_COMMON ${PM_ROOT}/src/common/*.c)
-
-add_library(pm STATIC
-    ${PM_CORE} ${PM_COMMON}
-    ${PM_ROOT}/src/osal/pm_osal_port_cm3.c
-    ${PM_ROOT}/src/port/stm32f1/pm_port_stm32f1.c
-    ${PM_ROOT}/platform/stm32f103/board_f103c8.c
-    ${PM_ROOT}/platform/stm32f103/pm_platform.c
-)
-target_include_directories(pm PUBLIC
-    ${PM_ROOT}/include/pm
-    ${PM_ROOT}/include
-    ${PM_ROOT}/platform/stm32f103
-)
-target_compile_definitions(pm PUBLIC USE_HAL_DRIVER STM32F103xB)
-# HAL/CMSIS 的头路径与链接脚本见本仓 CMakeLists.txt，按你的工程改
+add_subdirectory(third_party/stm32-peripheral-model)
+target_link_libraries(app PRIVATE pm)
 ```
 
+`pm` 是聚合 target，已带齐所有用法要求：
+
+- include：`include/pm`（公开头之间用 `#include "pm_common.h"` 这类同目录写法）、`include`、
+  板级表目录，以及 HAL/CMSIS 头路径——**不需要你再手写 `-I`**；
+- 宏：`USE_HAL_DRIVER`、`STM32F103xB`；
+- 编译与**链接**两端的 `-mcpu=cortex-m3 -mthumb`（只加在编译端会在链接时报
+  `Unknown destination type (ARM/Thumb)`）；
+- `third_party/` 里的 HAL 目标文件（经 `pm_hal` 传递，不必自己逐个列源文件）。
+
+APP 侧只需自备启动文件、链接脚本与 `main()`：
+
+```cmake
+add_executable(app
+    src/main.c
+    third_party/stm32-peripheral-model/platform/stm32f103/startup_stm32f103xb.s
+    third_party/stm32-peripheral-model/third_party/cmsis/device/source/system_stm32f1xx.c
+)
+target_link_libraries(app PRIVATE pm)
+target_link_options(app PRIVATE
+    -T${CMAKE_CURRENT_SOURCE_DIR}/third_party/stm32-peripheral-model/platform/stm32f103/stm32f103c8.ld
+    --specs=nano.specs
+    -Wl,--gc-sections
+)
+```
+
+作为子工程时 `PM_BUILD_DEMO` 默认 OFF，不会往你的工程里加可执行文件。
 APP 侧只 include 公共头与板级表：
 
 ```c
-#include "pm_uart.h"
+#include "pm_pwm.h"
 #include "board_f103c8.h"
 ```
+
+两条接缝默认都有实现，不用你抄：`pm_port_get()` 在 `src/port/stm32f1/`，
+OSAL 在 `src/osal/pm_osal_port_cm3.c`（Cortex-M3）。只有在自写后端时才需要照
+`include/pm/pm_port.h` 与 `docs/00-contract.md` §9 的 `pm_osal_*` 契约实现一份。
 
 - 换板子只改 `platform/stm32f103/board_f103c8.c` 的引脚表，其余不动
   （[01-layering.md §9](docs/01-layering.md)）；

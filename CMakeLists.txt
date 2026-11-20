@@ -1,5 +1,12 @@
 ﻿cmake_minimum_required(VERSION 3.20)
-project(peripheral_model C ASM)
+
+# Usable both standalone and via add_subdirectory() from another project.
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    project(peripheral_model C ASM)
+    set(PM_TOP_LEVEL ON)
+else()
+    set(PM_TOP_LEVEL OFF)
+endif()
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -118,7 +125,37 @@ target_compile_options(pm_port_stm32f1 PRIVATE
     ${PM_CPU_FLAGS} ${PM_WARN_FLAGS} ${PM_OPT_FLAGS})
 target_link_libraries(pm_port_stm32f1 PUBLIC pm_core pm_osal pm_hal)
 
+# ------------------------------------------------------------ aggregate target
+# One-line integration for a host project:
+#     add_subdirectory(stm32-peripheral-model)
+#     target_link_libraries(app PRIVATE pm)
+# `pm` carries every usage requirement (headers, defines, CPU flags) and brings
+# the HAL/CMSIS objects along through pm_hal. The consumer still owns its startup
+# file, linker script and main().
+add_library(pm INTERFACE)
+target_include_directories(pm INTERFACE
+    ${PM_ROOT}/include/pm
+    ${PM_ROOT}/include
+    ${PM_PLATFORM}
+)
+target_compile_definitions(pm INTERFACE USE_HAL_DRIVER STM32F103xB)
+target_compile_options(pm INTERFACE ${PM_CPU_FLAGS})
+# The CPU flags must also reach the link line: without them the linker reads
+# Thumb objects as ARM and fails with "Unknown destination type (ARM/Thumb)".
+target_link_options(pm INTERFACE ${PM_CPU_FLAGS})
+# pm_core and the port call each other; a linker group removes the ordering
+# question without listing any archive twice (CMake de-duplicates repeats).
+target_link_libraries(pm INTERFACE
+    -Wl,--start-group pm_port_stm32f1 pm_core pm_osal pm_hal -Wl,--end-group)
+
 # ------------------------------------------------------------------- firmware
+if(PM_TOP_LEVEL)
+    set(PM_DEMO_DEFAULT ON)
+else()
+    set(PM_DEMO_DEFAULT OFF)
+endif()
+option(PM_BUILD_DEMO "Build the F103C8 demo firmware (pm_f103_demo)" ${PM_DEMO_DEFAULT})
+if(PM_BUILD_DEMO)
 add_executable(pm_f103_demo
     src/app/main.c
     platform/stm32f103/startup_stm32f103xb.s
@@ -163,3 +200,4 @@ add_custom_command(TARGET pm_f103_demo POST_BUILD
     COMMAND ${CMAKE_SIZE} $<TARGET_FILE:pm_f103_demo>
     COMMENT "Generating .bin/.hex and reporting size"
 )
+endif() # PM_BUILD_DEMO
