@@ -24,7 +24,7 @@ cmake --build build-host --config Debug
 ctest --test-dir build-host -C Debug --output-on-failure
 ```
 
-期望输出 `689 checks, 0 failure(s)`，退出码 0。
+期望输出 `705 checks, 0 failure(s)`（2026-11-21 复跑，MSVC 19.51，C11，Debug），退出码 0。
 
 最小单测示例（加到 `tests/host/test_main.c`，并在 `main()` 里调用）：
 
@@ -40,7 +40,7 @@ static void test_ringbuf_minimal(void)
 }
 ```
 
-`CHECK` 宏自己计数，失败时打印文件名与行号；断言总数变化时同步更新 README 里的断言数（当前 689）。
+`CHECK` 宏自己计数，失败时打印文件名与行号；断言总数变化时同步更新 README 里的断言数（当前 705）。
 
 ## 能做什么
 
@@ -90,9 +90,9 @@ static void test_ringbuf_minimal(void)
 | --- | --- | --- |
 | 时钟 | HSE→PLL 72 MHz | `pm_clock_init()` 配置；HSE 起振失败回落 HSI 8 MHz，`pm_platform_core_clock()` 可读实际主频 |
 | ARM 交叉编译 | 通过 | `arm-none-eabi-gcc 14.3.1`，无项目代码警告 |
-| 链接 | 通过 | Flash 28536 B / 64 KB（43.54%），RAM 3376 B / 20 KB（16.48%） |
-| 产物 | 已生成 | `pm_f103_demo`（ELF）/ `.bin`（28536 B）/ `.hex` / `.map` |
-| 主机单测 | 通过 | 689 项断言，0 失败（MSVC 19.51，C11） |
+| 链接 | 通过 | Flash 28540 B / 64 KB（43.55%），RAM 3376 B / 20 KB（16.48%） |
+| 产物 | 已生成 | `pm_f103_demo`（ELF）/ `.bin`（28540 B）/ `.hex` / `.map` |
+| 主机单测 | 通过 | 705 项断言，0 失败（MSVC 19.51，C11；2026-11-21 复跑） |
 | 动态分配 | 不存在 | `nm` 中无 `malloc` / `free` / `_sbrk` |
 | 向量表 | 正确 | 首字 `0x20005000`（20 KB RAM 顶），Reset_Handler `0x08000229`（Thumb） |
 | **上板运行** | **部分验证** | 时钟与 UART 收发已在真实板卡上验证；I2C 已用板载 AHT20（0x70）验证触发/读取时序；PWM 通道、电机、编码器、继电器、循迹、超声已由板端固件集成并上板，验证深度逐条不同（「已集成案例」）；SPI、ADC、软件音调、舵机未接真实器件/负载 |
@@ -216,8 +216,8 @@ claim；内部不兼容占用、表外已启动、CEN、remap 四条分支也都
 `MOTOR force timer|remap` 诊断入口，同一配置）**35968 B / 6048 B**（较 `e57402f`
 +936 / +8）。接入 claim 表时相对板端上一版 33136 / 5504 B 为 +1896 / +536 B。
 提醒：这些是**板端整机数字**，不是本仓 demo 的 `28540 B / 3376 B`（demo 见上表）；
-本节此前引用的默认配置 31316 B / 5448 B 与 sonar 组合 32084 B / 5472 B 是 claim 表
-接入之前的整机值，已不代表当前集成，本轮未重测 `PM_ENABLE_SONAR=OFF` 组合。
+默认 `PM_ENABLE_SONAR=OFF` 组合后续已实测为 **35132 B / 6024 B**（2026-11-20，板端 `INDEX.md` §147）；
+本节此前引用的 31316 B / 5448 B 与 32084 B / 5472 B 是 claim 表接入之前的整机值，已不代表当前集成。
 
 **边界**
 
@@ -346,7 +346,7 @@ ctest --test-dir build-host -C Debug --output-on-failure
 ```
 
 `ctest` 与直接跑 `build-host/Debug/pm_host_tests.exe` 等价，二者之一即可；
-输出形如 `689 checks, 0 failure(s)`，退出码 0 表示全过。
+输出形如 `705 checks, 0 failure(s)`，退出码 0 表示全过。
 
 ---
 
@@ -648,7 +648,7 @@ APP → components → OSAL → BSP(本仓库的 pm_* 契约) → 芯片后端 �
 
 `tools/check_layering.py` 不是本仓写的，是
 [firmware-four-layer-architecture](https://github.com/BiscuiTs2026/firmware-four-layer-architecture)
-检查器的**单文件拷贝**（上游提交 `af88491`，文件自述 v3.2.0）。来源与同步信息记在
+检查器的**单文件拷贝**（上游提交 `3c507b7`，checker 3.3.1）。来源与同步信息记在
 `tools/CHECKER.lock`（版本、来源仓、来源提交、上游 blob、同步日期、本地补丁）；本仓除
 文件头 `source-commit` 与 `SOURCE_COMMIT` 常量外不改脚本，**不修改判定规则**。
 
@@ -669,7 +669,7 @@ python3 tools/check_layering.py . --roles .arch-roles
 
 - 8 条：`src/port/stm32f1/pm_port_stm32f1.c` 第 29/33/36/39/42/45/48/51 行 include 组件层
   头文件（`pm_uart.h` 等八个模块），只取句柄类型与 ISR 钩子声明，不调用组件公开 API；
-- 10 条：同文件第 391/401/413/780/792/1161/1165/1385/1394/2428 行调用 `pm_*_hw_*`
+- 10 条：同文件第 391/401/413/780/792/1161/1165/1385/1394/2461 行调用 `pm_*_hw_*`
   ISR 钩子，这些钩子按契约只允许端口层在中断上下文调用。
 
 即：WARN 记录的是"依赖倒置 + 中断回投"这两条设计选择。WARN 数量或内容变化时，
@@ -712,9 +712,9 @@ python3 tools/check_layering.py . --roles .arch-roles
 CI 的固件工具链钉在 14.3.rel1，与本地 `gnu-tools-for-stm32 14.3.1+st.2`（ST 打包）同主版本；
 若该下载地址日后失效，需同步改 `ci.yml` 与本节，不要让版本静默漂移。
 
-**未在本地实测的部分**：主机作业的 `ctest` 命令在本地 Windows 跑过（1/1 通过），但作为
-Actions 步骤尚未在 CI 中执行过；固件作业的 14.3.rel1 下载地址与工具链包本地无法获取，
-同样未实测。两者首次生效都以 CI 实际结果为准，不要当作已验证。
+**CI 实测**：`.github/workflows/ci.yml` 的三个作业已在 2026-11-20 的 `main` 上执行并通过
+（run 44740232484：固件构建、主机单测、四层架构检查均 success）；固件作业的 14.3.rel1
+下载地址有效。
 
 **项目约定：编译告警即错误，不许为"编过"关掉。** 主机单测用 `/W4`（MSVC）或
 `-Wall -Wextra -Wshadow -Werror`（GCC），固件构建同样把隐式声明当错误。v0.5 就有一个
