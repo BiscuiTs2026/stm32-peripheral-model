@@ -1,4 +1,4 @@
-/*
+﻿/*
  * test_main.c - host-side tests for the vendor-free core.
  *
  * The same src/core/*.c files that are compiled into the firmware are
