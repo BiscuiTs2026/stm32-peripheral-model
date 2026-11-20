@@ -648,7 +648,7 @@ APP → components → OSAL → BSP(本仓库的 pm_* 契约) → 芯片后端 �
 
 `tools/check_layering.py` 不是本仓写的，是
 [firmware-four-layer-architecture](https://github.com/BiscuiTs2026/firmware-four-layer-architecture)
-检查器的**单文件拷贝**（上游提交 `3c507b7`，checker 3.3.1）。来源与同步信息记在
+检查器的**单文件拷贝**（上游提交 `3c507b7`，checker 3.3.1；**未跟到 3.4.1**，原因记在 `tools/CHECKER.lock` 末注）。来源与同步信息记在
 `tools/CHECKER.lock`（版本、来源仓、来源提交、上游 blob、同步日期、本地补丁）；本仓除
 文件头 `source-commit` 与 `SOURCE_COMMIT` 常量外不改脚本，**不修改判定规则**。
 

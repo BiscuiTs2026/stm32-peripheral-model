@@ -10,3 +10,6 @@ local-patches   = none
 # 升级步骤：覆盖 tools/check_layering.py → 改文件头 source-commit 与 SOURCE_COMMIT → 改本文件三处 → 本地跑
 #   python3 tools/check_layering.py --version --lock tools/CHECKER.lock
 # 通过后再提交；CI 第一步同一命令即版本漂移门禁。
+# 2026-11-21：板端仓（stm32f103-bringup）已升到 3.4.1（d62c226），本仓仍锁 3.3.1，不是漏改。
+# 原因：升锁要重跑并重新确认本仓 0 ERROR / 18 WARN 基线、同步 CI 门禁与 README 数字，
+# 与板端仓升锁不属于同一轮；本仓升锁留独立一轮处理。
