@@ -359,7 +359,10 @@ static const pm_pwm_cfg_t servo_cfg = {
 (void)pm_pwm_enable(&s_servo, true);
 ```
 
-- 占空比用千分比（0～1000），不引入浮点；
+- 占空比用千分比（0～1000），不引入浮点；对外协议是百分数（0～100），由模型侧适配层按
+  `pct × 10` / `permille ÷ 10` 换算（契约 §14.1，决策 0018）；
+- 时基由端口决定（本板舵机 PSC 71 / ARR 19999、电机 PSC 0 / ARR 3599，均已实测）；
+  端口写寄存器前必须用 `pm_pwm_timing_matches()` 在 10‰ 容差内复核，`timing_compute()` 只是可选工具；
 - `pm_pwm_set_pulse_us` 按当前频率换算，超过一个周期截断到 1000‰；
 - **同一定时器的通道共享周期**：PA0/PA1 同属 TIM2，PB8/PB9 同属 TIM4。
   兄弟通道已打开且频率不同时，第二个 `init` 返回 `PM_ERR_BUSY`，不会静默改期；
