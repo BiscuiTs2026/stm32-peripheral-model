@@ -4,7 +4,7 @@
 
 一套按"接口契约优先"方式组织的 STM32F1 外设代码：上层只依赖 `include/pm/` 里的公共 API，芯片相关的一切都收敛在 port 层。目标是换板子只改一张引脚表，换芯片只换一个 port 目录，核心逻辑永远能在主机上跑单测。
 
-当前版本 **v0.6**，配套 STM32F103C8T6 最小系统板（72 MHz、20 KB RAM、64 KB Flash）。
+当前版本 **v0.7.0**，配套 STM32F103C8T6 最小系统板（72 MHz、20 KB RAM、64 KB Flash）。
 已实现 GPIO、UART、SPI（主机全双工，中断 + 可选 DMA）、I2C（主机，中断状态机，支持写读合并；repeated START 仅适用于寄存器型器件）、ADC（单通道单次转换，EOC 中断）、PWM（定时器比较输出）、软件音调（TIM3 中断翻转）、循迹（单路数字量）、正交编码器（AB x4，可选按键输入）、继电器（单路 GPIO，极性必填）、电机（DRV8833 形态，双 PWM 输入，含滑行/刹车两种停止）与舵机（角度↔脉宽映射，独立成模型）。
 
 > **使用前必读**：`include/pm/*.h` 里的 `struct pm_xxx` 字段（`magic`、`state` 等）是公开可见的——
@@ -682,3 +682,8 @@ Actions 步骤尚未在 CI 中执行过；固件作业的 14.3.rel1 下载地址
 [third_party/ST_LICENSE.md](third_party/ST_LICENSE.md)，来源与替换说明见
 [third_party/README.md](third_party/README.md)。本仓库自带链接脚本与启动配置，
 未复制 ST 的链接脚本模板（其条款禁止再分发）。
+
+## 许可
+
+本仓库自有代码以 MIT 许可发布，见 [LICENSE](LICENSE)。
+`third_party/` 下的文件保留各自原始许可，不因本仓的 MIT 许可而改变。

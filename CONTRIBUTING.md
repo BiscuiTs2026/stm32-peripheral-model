@@ -41,8 +41,8 @@ python tools/check_layering.py . --roles .arch-roles
 ## 文档同步
 
 - 改公共 API 或语义 → 更新 `docs/00-contract.md` 对应章节；
-- 结构性变动、文件移动 → 在 `docs/02-changelog.md` 顶部 `Unreleased` 下加条目，
-  **不改已发布版本的段落**；
+- 结构性变动、文件移动 → 在 `docs/02-changelog.md` 顶部的未发布段落加条目（发布时该段落
+  改名为版本号，如 `v0.7.0`），**不改已发布版本的段落**；
 - 新增/删除模块 → 同步 README 的模块清单、模块数与目录树（`docs/01-layering.md`）。
 
 ## 提交信息
