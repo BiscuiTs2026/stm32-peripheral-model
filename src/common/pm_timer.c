@@ -102,10 +102,12 @@ static pm_err_t check_locked(const pm_timer_claim_t *claim)
 
     /* Nothing in the table knows this timer: ask the port whether somebody
      * outside the model already runs it. Only then, because once our own claim
-     * exists the hardware is legitimately busy and the probe would flag us. */
+     * exists the hardware is legitimately busy and the probe would flag us.
+     * A busy timer is reported as PM_ERR_BUSY so the caller can tell "started
+     * by code we cannot see" apart from "claimed by another module". */
     if ((live == 0u) && (s_probe != NULL) &&
         s_probe(s_probe_ctx, claim->hw_id)) {
-        return PM_ERR_CONFLICT;
+        return PM_ERR_BUSY;
     }
 
     if (owner != NULL) {
@@ -225,6 +227,38 @@ uint8_t pm_timer_claims(uint8_t hw_id)
         }
     }
     return n;
+}
+
+pm_err_t pm_timer_claim_at(uint8_t hw_id, uint8_t index, pm_timer_claim_t *out)
+{
+    uint8_t i;
+    uint8_t seen = 0u;
+
+    if (out == NULL) {
+        return PM_ERR_NULL;
+    }
+    if (hw_id >= PM_TIMER_ID_MAX) {
+        return PM_ERR_RANGE;
+    }
+
+    for (i = 0u; i < PM_TIMER_CLAIM_MAX; i++) {
+        const pm_timer_entry_t *e = &s_claims[i];
+
+        if ((e->used == 0u) || (e->hw_id != hw_id)) {
+            continue;
+        }
+        if (seen == index) {
+            out->hw_id     = e->hw_id;
+            out->owner_id  = e->owner_id;
+            out->role      = (pm_timer_role_t)e->role;
+            out->psc       = e->psc;
+            out->arr       = e->arr;
+            out->channels  = e->channels;
+            return PM_OK;
+        }
+        seen++;
+    }
+    return PM_ERR_RANGE;
 }
 
 void pm_timer_reset(void)

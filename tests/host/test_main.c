@@ -1320,6 +1320,34 @@ static void test_timer_arbiter(void)
     CHECK(pm_timer_claims(2u) == 1u);
     CHECK(pm_timer_release(2u, 0u) == PM_ERR_STATE);
 
+    /* Who holds the timer: index-addressable, owner and config included. */
+    {
+        pm_timer_claim_t seen;
+
+        memset(&seen, 0, sizeof(seen));
+        CHECK(pm_timer_claim_at(2u, 0u, &seen) == PM_OK);
+        CHECK(seen.owner_id == 1u);             /* owner 0 was just released */
+        CHECK(seen.role == PM_TIMER_ROLE_PWM);
+        CHECK(seen.psc == 31u);                 /* retime above reached it */
+        CHECK(seen.arr == 64499u);
+        CHECK(seen.channels == 0x02u);
+        CHECK(pm_timer_claim_at(2u, 1u, &seen) == PM_ERR_RANGE);
+        CHECK(pm_timer_claim_at(2u, 0u, NULL) == PM_ERR_NULL);
+        CHECK(pm_timer_claim_at(PM_TIMER_ID_MAX, 0u, &seen) == PM_ERR_RANGE);
+    }
+
+    /* Released timer can be claimed again, by a different owner. */
+    CHECK(pm_timer_release(2u, 1u) == PM_OK);
+    CHECK(pm_timer_claims(2u) == 0u);
+    {
+        pm_timer_claim_t again = pwm0;
+
+        again.owner_id = 4u;
+        CHECK(pm_timer_claim(&again) == PM_OK);
+        CHECK(pm_timer_claims(2u) == 1u);
+        CHECK(pm_timer_release(2u, 4u) == PM_OK);
+    }
+
     /* Table capacity: 8 entries, the ninth distinct timer is refused. */
     pm_timer_reset();
     {
@@ -1358,14 +1386,22 @@ static void test_timer_arbiter(void)
 
         busy.hw_id    = 2u;
         busy.owner_id = 3u;
-        CHECK(pm_timer_check(&busy) == PM_ERR_CONFLICT);   /* dry run sees it */
-        CHECK(pm_timer_claim(&busy) == PM_ERR_CONFLICT);
+        CHECK(pm_timer_check(&busy) == PM_ERR_BUSY);   /* dry run sees it */
+        CHECK(pm_timer_claim(&busy) == PM_ERR_BUSY);
         CHECK(pm_timer_claims(2u) == 0u);                  /* nothing recorded */
 
         /* Idle timer on the same run goes through (4 = TIM4). */
         busy.hw_id = 4u;
         CHECK(pm_timer_claim(&busy) == PM_OK);
         CHECK(pm_timer_claims(4u) == 1u);
+
+        /* The two refusals stay distinguishable: 2 is BUSY (started by code
+           we cannot see), 4 is CONFLICT (another module holds the channel). */
+        busy.hw_id    = 4u;
+        busy.owner_id = 8u;
+        CHECK(pm_timer_claim(&busy) == PM_ERR_CONFLICT);
+        busy.hw_id    = 2u;
+        CHECK(pm_timer_claim(&busy) == PM_ERR_BUSY);
     }
 
     /* Once the model owns the timer it is legitimately busy (the probe watches

@@ -1048,6 +1048,14 @@ PB15 同时是 SPI2_MOSI 的复用脚：按键与 `BOARD_SPI_2` **互斥**，不
 - 表是固定的 8 条静态表，`claim`/`release` 在主循环调用，不在 ISR 里调用。
 - 占用表只能看见"经本模型申请"的占用；裸用寄存器的代码看不见。端口必须提供外部占用
   探测，见 20.7。
+- **查询占用方**：`pm_timer_claims(hw_id)` 取该定时器的 live claim 数量；
+  `pm_timer_claim_at(hw_id, index, &claim)` 取出第 `index` 条（0 起，按表内顺序）的
+  `owner_id`、`role`、`psc`、`arr`、`channels`。`hw_id` 越界或 `index` 超出数量返回
+  `PM_ERR_RANGE`，`out` 为 `NULL` 返回 `PM_ERR_NULL`。
+- **未 claim 直接使用：允许**（写死）。表只约束"走本 API 的调用方"，模型不会、也无法拦截
+  裸写寄存器的代码；这类使用一旦发生，端口探测（20.7）会让后续 `claim` 返回
+  `PM_ERR_BUSY`，模型不会替它接管。放弃 claim 就等于放弃冲突保护，这是使用者的选择，
+  不是模型的静默降级。
 
 ### 20.3 判据（写死，不靠实现推断）
 
@@ -1071,8 +1079,12 @@ PB15 同时是 SPI2_MOSI 的复用脚：按键与 `BOARD_SPI_2` **互斥**，不
 ### 20.4 错误码语义（写死）
 
 - `PM_ERR_CONFLICT`：**共享资源已被不兼容配置占用，重试不会成功**。要么换配置，要么等
-  对方 release。**不允许**用它表达"同一对象重复 init"。
-- `PM_ERR_BUSY`：同一对象/同一硬件实例重复 init，或 PWM 兄弟通道请求不同频率。
+  对方 release。**不允许**用它表达"同一对象重复 init"，也不再用它表达"定时器已被外部
+  代码启动"（那是 `PM_ERR_BUSY`，见下条与 20.7）。
+- `PM_ERR_BUSY`：同一对象/同一硬件实例重复 init；PWM 兄弟通道请求不同频率；或该定时器
+  已被**非本模型代码**启动/重配（20.7 探测为真）。前两种是本模型内部的状态冲突，第三种
+  是"资源不归本模型管"，三者都**不该重试**，区别在于：前两种自己 release/换通道即可解，
+  第三种要么让人去停掉外部使用者，要么按 20.5 报 `PM_ERR_DISABLED`。
 - `PM_ERR_DISABLED`：功能被**有意关闭**（例如测距因 TIM2 让给电机而停用），调用方不得
   当作可用，也不该重试。与 `PM_ERR_CONFLICT` 的区别：CONFLICT 可修（换配置/换资源），
   DISABLED 需要换设计。
@@ -1091,8 +1103,10 @@ PB15 同时是 SPI2_MOSI 的复用脚：按键与 `BOARD_SPI_2` **互斥**，不
 ### 20.6 怎么验证
 
 - 主机单测 `test_timer_arbiter()`：两颗模块抢同一颗 TIM 时第二个 `claim` 失败；同 PSC/ARR
-  不同通道共存；通道重叠失败；`retime` 在混合角色下失败；`release` 后可重新声明；表满
-  返回 `PM_ERR_NOMEM`。
+  不同通道共存；通道重叠失败；`retime` 在混合角色下失败；`release` 后可重新声明（含换
+  `owner_id`）；表满返回 `PM_ERR_NOMEM`；`pm_timer_claim_at()` 按 index 取回 `owner_id`
+  与配置，越界返回 `PM_ERR_RANGE`；探测为真时 `claim`/`check` 返回 `PM_ERR_BUSY`，而表内
+  不兼容占用仍返回 `PM_ERR_CONFLICT`——两种拒绝在同一轮里可区分。
 - 板上：舵机（TIM4）+ 音调（TIM3）应同时可用；把音调的 `hw_id` 改成 4（TIM4）再 `init`
   → 期望 `PM_ERR_CONFLICT`。【待实测】
 
@@ -1119,8 +1133,10 @@ void pm_timer_set_probe(pm_timer_probe_fn fn, void *ctx);
 
 - **探测时机**：仅当该 `hw_id` 在表里**没有任何 live claim** 时调用。一旦模型自己已经
   启动时基，`CR1.CEN` 是模型置的，再探测会把自家兄弟通道判成外部占用。
-- **返回值**：探测为 `true` → `pm_timer_claim()` 与 `pm_timer_check()` 都返回
-  `PM_ERR_CONFLICT`，**表不变、寄存器不变**。不静默接管，也不自动降级。
+- **返回值（v0.8.0 起）**：探测为 `true` → `pm_timer_claim()` 与 `pm_timer_check()` 都返回
+  `PM_ERR_BUSY`，**表不变、寄存器不变**。不静默接管，也不自动降级。v0.7.1 及之前这里返回
+  的是 `PM_ERR_CONFLICT`：外部裸占用被归进"换配置可解"一类，实际换配置也解不了，属于早期
+  措辞便宜，现已改正。接入方若用 `== PM_ERR_CONFLICT` 判断"外部忙"，需改判 `PM_ERR_BUSY`。
 - **探测判据（只有两条，满足任一即判占用）**：`TIMx->CR1.CEN != 0`，或 `AFIO->MAPR` 中
   对应重映射位非 0；未知 `hw_id` 一律返回 `true`（不认识就不接管）。
 - **本板实现**（`pm_port_stm32f1.c`）：`hw_id` **2/3/4** 直接对应 TIM2/TIM3/TIM4
@@ -1130,8 +1146,9 @@ void pm_timer_set_probe(pm_timer_probe_fn fn, void *ctx);
   只置高位的组合同样算外部重配）；覆盖 TIM2/TIM3/TIM4 三颗。
 - **运行期占用表延后（决策 0018 第 5 条）**：板端当前只有探测，没有 claim/release/retime
   表；§20.2/20.3 的表是本模型仓的实现，板端接入留独立一轮，探测与表不混做。
-- 与 20.5 的关系：外部占用属于 `PM_ERR_CONFLICT`（可修：先让对方释放/停用），不是
-  `PM_ERR_DISABLED`（那是指功能被设计性关闭）。
+- 与 20.5 的关系：外部占用属于 `PM_ERR_BUSY`（v0.8.0 起；v0.7.1 及之前误归
+  `PM_ERR_CONFLICT`）。它不是 `PM_ERR_DISABLED`（那是指功能被设计性关闭），也不该被当成
+  可重试的 `PM_ERR_CONFLICT`：外部使用者不归本模型管，重试多少次都不会变。
 
 ---
 

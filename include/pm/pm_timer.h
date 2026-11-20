@@ -14,6 +14,8 @@
  *      * PWM + PWM: same PSC/ARR and disjoint channels;
  *      * everything else: one owner per timer.
  *  - An incompatible request returns PM_ERR_CONFLICT. Nothing is modified.
+ *  - A timer already started by code outside this model returns PM_ERR_BUSY
+ *    (the port probe reports it); the model never takes it over.
  *  - Releasing is mandatory in deinit/close, including on the error path.
  *  - The table only sees code that uses this API. Firmware that starts a
  *    timer on its own is invisible, so the port installs a probe (see
@@ -74,7 +76,7 @@ pm_err_t pm_timer_check(const pm_timer_claim_t *claim);
  * sibling channels, so it is skipped from then on.
  *
  * A busy probe makes pm_timer_claim() and pm_timer_check() return
- * PM_ERR_CONFLICT without writing anything. The model never takes a timer over
+ * PM_ERR_BUSY without writing anything. The model never takes a timer over
  * silently (see docs/00-contract.md section 20.7). */
 typedef bool (*pm_timer_probe_fn)(void *ctx, uint8_t hw_id);
 
@@ -84,6 +86,11 @@ void pm_timer_set_probe(pm_timer_probe_fn fn, void *ctx);
 
 /* Number of live claims on a timer (0 = free). */
 uint8_t pm_timer_claims(uint8_t hw_id);
+
+/* Reads who holds a timer: copies the index-th live claim of `hw_id`
+ * (0-based, in table order) so the caller can see the owner and its config.
+ * PM_ERR_RANGE when hw_id is unknown or index >= pm_timer_claims(hw_id). */
+pm_err_t pm_timer_claim_at(uint8_t hw_id, uint8_t index, pm_timer_claim_t *out);
 
 /* Clears the whole table and uninstalls the probe (power-on state). Only for
  * test setup and full re-initialisation; the port must re-install its probe

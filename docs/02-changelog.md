@@ -3,6 +3,28 @@
 只记录跨版本的结构性变动，以及"事后容易被误判为丢文件"的操作。接口细节以
 [docs/00-contract.md](00-contract.md) 为准。
 
+## v0.8.0（2026-11-20）
+
+**返回值语义变更**：定时器已被非模型代码启动/重配时，`pm_timer_claim()` 与
+`pm_timer_check()` 从 `PM_ERR_CONFLICT` 改报 `PM_ERR_BUSY`。
+
+- **影响面**：接入方若用 `== PM_ERR_CONFLICT` 判断"外部忙"，需改判 `PM_ERR_BUSY`。
+  v0.7.1 及之前这两种拒绝不可区分：表内不兼容占用与外部裸占用都返回 `PM_ERR_CONFLICT`。
+  现在三类结果互相可分——本模型内部重复 init / 外部已启动 → `PM_ERR_BUSY`，
+  别的模块占着不兼容配置 → `PM_ERR_CONFLICT`，释放后再 claim → `PM_OK`。
+- **为什么改**：把外部裸占用归进 `PM_ERR_CONFLICT`（"换配置可解"）是早期措辞便宜，
+  实际换配置也解不了；板端此前只能自己把 `CEN` 置位映射成 BUSY，等于替模型补这层语义，
+  本次收回模型。§20.4 的 `PM_ERR_BUSY` 定义与 §20.7 的返回值同批更新，两处能对上。
+- 新增 `pm_timer_claim_at(hw_id, index, &claim)`：按表内顺序取出第 index 条占用的
+  `owner_id`、`role`、`psc`、`arr`、`channels`，配合 `pm_timer_claims()` 可枚举"谁占着"。
+  纯增量 API，未改任何既有签名；未引入新错误码（复用 `PM_ERR_BUSY`）。
+- 契约 §20.2 补"未 claim 直接裸用：**允许**（表只约束走 API 的调用方），但等于放弃冲突
+  保护；端口探测会让后续 claim 返回 `PM_ERR_BUSY`，模型不替它接管"；§20.6 验证清单与
+  §20.7 同步。
+- 主机单测 689 → 705 checks（新增 16 条，原有断言未删），0 failure；
+  FLASH 28536 → 28540 B（+4 B），RAM 3376 B 不变（`pm_timer_claim_at` 在 demo 里被
+  `gc-sections` 收掉，增量来自 `check()` 的返回值分支）。
+
 ## v0.7.1（2026-11-20）
 
 **仅文档补丁，代码与 v0.7.0 完全相同**（FLASH 28536 B / RAM 3376 B 不变，未重测）。
