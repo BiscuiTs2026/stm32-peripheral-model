@@ -19,7 +19,15 @@ work/
 │   ├── pm_spi.h                  SPI 主机模型 API
 │   ├── pm_i2c.h                  I2C 主机模型 API
 │   ├── pm_adc.h                  ADC 单通道单次转换 API
-│   └── pm_pwm.h                  PWM 输出通道 API
+│   ├── pm_pwm.h                  PWM 输出通道 API
+│   ├── pm_pwm_math.h             PWM 时基数学（PSC/ARR、CCR 换算，common 层契约头）
+│   ├── pm_timer.h                定时器占用与仲裁（common 层契约头）
+│   ├── pm_tone.h                 软件音调 API
+│   ├── pm_track.h                单路循迹 API
+│   ├── pm_encoder.h              正交编码器 API（AB x4，可选按键）
+│   ├── pm_relay.h                单路继电器 API
+│   ├── pm_motor.h                电机模型 API（DRV8833 双 PWM 输入）
+│   └── pm_servo.h                舵机角度接口（组合 pm_pwm）
 ├── src/
 │   ├── core/                     与硬件无关的模型实现
 │   │   ├── pm_err.c
@@ -30,12 +38,21 @@ work/
 │   │   ├── pm_spi.c              传输生命周期、超时中止、完成/错误事件
 │   │   ├── pm_i2c.c              写/读/写读事务、超时复位、完成/错误事件
 │   │   ├── pm_adc.c              单次转换生命周期、超时停止、完成/错误事件
-│   │   └── pm_pwm.c              频率/占空比校验与转发
+│   │   ├── pm_pwm.c              频率/占空比校验与转发
+│   │   ├── pm_tone.c             软件音调（定时器中断翻转）
+│   │   ├── pm_track.c            单路循迹极性判定
+│   │   ├── pm_encoder.c          AB x4 解码、计数、可选按键
+│   │   ├── pm_relay.c            单路继电器开关与失效安全
+│   │   ├── pm_motor.c            DRV8833 方向/滑行/刹车状态机
+│   │   └── pm_servo.c            角度↔脉宽换算，组合 pm_pwm
+│   ├── common/                   与硬件无关的纯逻辑（任何层可依赖）
+│   │   ├── pm_pwm_math.c         时基计算、自检、CCR 换算
+│   │   └── pm_timer.c            定时器占用表与冲突仲裁
 │   ├── osal/
 │   │   └── pm_osal_port_cm3.c    Cortex-M3 实现（PRIMASK + SysTick 计数）
 │   ├── port/stm32f1/             STM32F1 后端（唯一允许厂商类型的地方）
-│   │   ├── pm_port_stm32f1.h     内部头：GPIO/SPI/I2C/ADC/PWM 映射表、上下文
-│   │   └── pm_port_stm32f1.c     HAL 实现、UART/SPI/I2C/ADC ISR、pm_port_get()
+│   │   ├── pm_port_stm32f1.h     内部头：GPIO/SPI/I2C/ADC/PWM/tone/track/encoder 映射表、上下文
+│   │   └── pm_port_stm32f1.c     HAL 实现、UART/SPI/I2C/ADC/PWM/tone/track/encoder ISR、pm_port_get()
 │   ├── port/mock/                预留给第二阶段的 mock 目录
 │   └── app/
 │       └── main.c                示例：LED 闪烁 + 串口回显 + 心跳
@@ -46,7 +63,7 @@ work/
 │   ├── stm32f103c8.ld            自行编写的链接脚本（64K/20K）
 │   └── startup_stm32f103xb.s     启动文件（来自 CMSIS 设备包）
 ├── tests/host/                   主机测试
-│   ├── test_main.c               345 项断言
+│   ├── test_main.c               681 项断言
 │   ├── pm_port_mock.c            内存后端（GPIO/UART/SPI/I2C/ADC/PWM）
 │   ├── pm_osal_host.c            可控时间
 │   └── CMakeLists.txt            独立构建（MSVC/GCC 均可）
@@ -64,6 +81,7 @@ work/
 | --- | --- | --- |
 | `include/pm/` | 对外承诺的行为与类型 | 任何实现细节 |
 | `src/core/` | 状态机、缓冲、事件、参数校验 | 寄存器、HAL、引脚 |
+| `src/common/` | 任何层可复用的纯逻辑（时基数学、定时器仲裁） | 寄存器、HAL、组件状态 |
 | `src/osal/` | 时间与临界区 | 业务时间语义 |
 | `src/port/stm32f1/` | 把 ops 映射到 HAL；ISR 搬运 | 协议解析、业务判断 |
 | `platform/` | 板级引脚表、时钟启动、链接脚本、启动文件 | 外设行为 |
@@ -73,11 +91,12 @@ work/
 ## 3. 依赖关系
 
 ```
-main.c ──► pm_gpio.h / pm_uart.h / pm_spi.h / pm_i2c.h
-           / pm_adc.h / pm_pwm.h / pm_platform.h / board_f103c8.h
+main.c ──► pm_gpio.h / pm_uart.h / pm_spi.h / pm_i2c.h / pm_adc.h / pm_pwm.h
+           / pm_tone.h / pm_track.h / pm_encoder.h / pm_relay.h / pm_motor.h / pm_servo.h
+           / pm_platform.h / board_f103c8.h
               │
               ▼
-          pm_core (src/core)
+          pm_core (src/core) ──► pm_common (src/common)
               │  pm_port_get()
               ▼
       pm_port_stm32f1 ──► HAL ──► CMSIS ──► 寄存器
@@ -86,6 +105,7 @@ main.c ──► pm_gpio.h / pm_uart.h / pm_spi.h / pm_i2c.h
 ```
 
 - `src/core` 编译时**看不到** `stm32f1xx.h`（CMake 的 include 路径里没有它）；
+- `src/core` 可以依赖 `src/common`（时基数学、定时器仲裁），`src/common` 不依赖任何层；
 - `src/port` 编译时看不到 APP；
 - `platform/` 同时被 port 与可执行目标引用，但只提供表与启动代码。
 
