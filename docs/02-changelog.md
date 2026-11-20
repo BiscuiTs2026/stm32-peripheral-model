@@ -3,6 +3,13 @@
 只记录跨版本的结构性变动，以及"事后容易被误判为丢文件"的操作。接口细节以
 [docs/00-contract.md](00-contract.md) 为准。
 
+## 模型 API 接受 `invert = UNSET`（2026-11-20）
+
+- `pm_motor_init()` 不再把 `PM_MOTOR_INVERT_UNSET` 当非法值：语义等同 `OFF`（不交换），
+  零初始化配置可直接使用，默认行为不变；`UNSET/OFF/ON` 之外的取值仍返回 `PM_ERR_PARAM`。
+- `docs/00-contract.md` §23.3 与 `include/pm/pm_motor.h` 注释同步；
+  主机单测覆盖 UNSET、OFF、ON 三种取值与非法值。
+
 ## 契约对齐 0018（2026-11-20，仅文档，未改代码）
 
 按协作区决策记录 0018（外设契约七条对齐定案）改述契约，代码与测试未动：

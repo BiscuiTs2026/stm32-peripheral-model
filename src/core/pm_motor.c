@@ -61,7 +61,8 @@ pm_err_t pm_motor_init(pm_motor_t *m, const pm_motor_cfg_t *cfg)
     if ((m == NULL) || (cfg == NULL)) {
         return PM_ERR_NULL;
     }
-    if ((cfg->invert != PM_MOTOR_INVERT_OFF) &&
+    if ((cfg->invert != PM_MOTOR_INVERT_UNSET) &&
+        (cfg->invert != PM_MOTOR_INVERT_OFF) &&
         (cfg->invert != PM_MOTOR_INVERT_ON)) {
         return PM_ERR_PARAM;
     }

@@ -1246,9 +1246,9 @@ void pm_timer_set_probe(pm_timer_probe_fn fn, void *ctx);
   `FORWARD` 只表示"选了 IN1 这一路"，不表示机械向前——机械方向未实测（决策 0018 第 1 条）。
 - 换向时先把两路都写 0 再驱动目标路，任何换向都不会经过 `1/1`（刹车）这个中间态。
 - `invert` 交换两路角色（左轮/右轮反装用），是**模型可选能力**，不是板端迁移条件：
-  板端不提供 `invert`，`FWD` 固定走 CH1，接板端时填 `PM_MOTOR_INVERT_OFF` 即可。
-- 模型 API 仍要求显式取值：`PM_MOTOR_INVERT_UNSET`（零初始化天然值）返回 `PM_ERR_PARAM`。
-  这是模型"不猜默认"的写法，与 §22.2 的极性规则一致，不代表板端要实现 `invert`。
+  板端不提供 `invert`，`FWD` 固定走 CH1，接板端时保持零初始化（`PM_MOTOR_INVERT_UNSET`）即可。
+- `PM_MOTOR_INVERT_UNSET`（零初始化天然值）等同 `OFF`，不做交换；`OFF`/`ON` 语义不变；
+  `UNSET/OFF/ON` 之外的取值一律 `PM_ERR_PARAM`。默认行为与旧版显式 `OFF` 完全一致。
 
 ### 23.4 两种停止
 

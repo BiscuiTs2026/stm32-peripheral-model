@@ -1,4 +1,4 @@
-﻿/*
+/*
  * test_main.c - host-side tests for the vendor-free core.
  *
  * The same src/core/*.c files that are compiled into the firmware are
@@ -1635,6 +1635,7 @@ static void test_motor(void)
     pm_pwm_t d;
     pm_motor_t m1;
     pm_motor_t m2;
+    pm_motor_t mu;
     pm_motor_cfg_t cfg;
     uint16_t coast_pair[2];
 
@@ -1645,6 +1646,7 @@ static void test_motor(void)
     memset(&d, 0, sizeof(d));
     memset(&m1, 0, sizeof(m1));
     memset(&m2, 0, sizeof(m2));
+    memset(&mu, 0, sizeof(mu));
 
     pwm_open(&a, 0u, 20000u);
     pwm_open(&b, 1u, 20000u);
@@ -1657,7 +1659,17 @@ static void test_motor(void)
 
     cfg.in1 = &a;
     cfg.in2 = &b;
-    CHECK(pm_motor_init(&m1, &cfg) == PM_ERR_PARAM);    /* invert UNSET */
+
+    /* UNSET (zero-initialised) means "no swap", i.e. the same as OFF. */
+    CHECK(pm_motor_init(&mu, &cfg) == PM_OK);
+    CHECK(pm_motor_set(&mu, 250u, PM_MOTOR_DIR_FORWARD) == PM_OK);
+    CHECK(mock_pwm_duty(0u) == 250u);
+    CHECK(mock_pwm_duty(1u) == 0u);
+    CHECK(pm_motor_stop(&mu, PM_MOTOR_STOP_COAST) == PM_OK);
+
+    /* Anything outside UNSET/OFF/ON is still a parameter error. */
+    cfg.invert = (pm_motor_invert_t)3;
+    CHECK(pm_motor_init(&m1, &cfg) == PM_ERR_PARAM);
     cfg.invert = PM_MOTOR_INVERT_OFF;
 
     cfg.in2 = &a;

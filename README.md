@@ -53,7 +53,7 @@
 | ARM 交叉编译 | 通过 | `arm-none-eabi-gcc 14.3.1`，无项目代码警告 |
 | 链接 | 通过 | Flash 28436 B / 64 KB（43.39%），RAM 3384 B / 20 KB（16.52%） |
 | 产物 | 已生成 | `pm_f103_demo`（ELF）/ `.bin`（28436 B）/ `.hex` / `.map` |
-| 主机单测 | 通过 | 676 项断言，0 失败（MSVC 19.51，C11） |
+| 主机单测 | 通过 | 681 项断言，0 失败（MSVC 19.51，C11） |
 | 动态分配 | 不存在 | `nm` 中无 `malloc` / `free` / `_sbrk` |
 | 向量表 | 正确 | 首字 `0x20005000`（20 KB RAM 顶），Reset_Handler `0x08000229`（Thumb） |
 | **上板运行** | **部分验证** | 时钟与 UART 收发已在真实板卡上验证；I2C 已用板载 AHT20（0x70）验证触发/读取时序；SPI、ADC、PWM、音调、循迹、编码器、继电器、电机、舵机未接真实器件/负载 |
@@ -169,7 +169,7 @@ cmake --build build-host --config Debug
 ./build-host/Debug/pm_host_tests.exe
 ```
 
-输出形如 `676 checks, 0 failure(s)`，退出码 0 表示全过。
+输出形如 `681 checks, 0 failure(s)`，退出码 0 表示全过。
 
 ---
 

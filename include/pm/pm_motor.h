@@ -32,8 +32,9 @@
  *    sitting at 1000.
  *  - Only fast decay (PWM on one input, the other low) is supported. Slow
  *    decay (PWM on one input, the other high) is deliberately not offered.
- *  - `invert` is mandatory: PM_MOTOR_INVERT_UNSET is rejected with
- *    PM_ERR_PARAM instead of being given a default.
+ *  - `invert` defaults to "no swap": PM_MOTOR_INVERT_UNSET (the
+ *    zero-initialised value) means OFF. Any value outside UNSET/OFF/ON is
+ *    rejected with PM_ERR_PARAM.
  */
 #ifndef PM_MOTOR_H
 #define PM_MOTOR_H
@@ -44,7 +45,7 @@
 #include <stdbool.h>
 
 typedef enum {
-    PM_MOTOR_INVERT_UNSET = 0,   /* invalid: "the caller did not decide" */
+    PM_MOTOR_INVERT_UNSET = 0,   /* default: no swap (same as OFF) */
     PM_MOTOR_INVERT_OFF   = 1,
     PM_MOTOR_INVERT_ON    = 2
 } pm_motor_invert_t;
