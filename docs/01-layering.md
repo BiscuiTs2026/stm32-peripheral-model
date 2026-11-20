@@ -63,7 +63,7 @@ work/
 │   ├── stm32f103c8.ld            自行编写的链接脚本（64K/20K）
 │   └── startup_stm32f103xb.s     启动文件（来自 CMSIS 设备包）
 ├── tests/host/                   主机测试
-│   ├── test_main.c               681 项断言
+│   ├── test_main.c               689 项断言
 │   ├── pm_port_mock.c            内存后端（GPIO/UART/SPI/I2C/ADC/PWM）
 │   ├── pm_osal_host.c            可控时间
 │   └── CMakeLists.txt            独立构建（MSVC/GCC 均可）
@@ -224,7 +224,8 @@ SPI DMA 完成回调 → 同一个 `HAL_SPI_TxRxCpltCallback`，第 5 步起完�
 2. 在 `board_*.c` 里填写 id → `(GPIOx, GPIO_PIN_n)` 的映射表；SPI 的 SCK/MISO/MOSI、I2C 的 SCL/SDA、
    ADC 的 `(port, pin, ADC_Channel)` 与 PWM 的 `(port, pin, TIMx, TIM_CHANNEL_n, timer_index)` 也在这张表里；
 3. 若使用不同的串口引脚，修改 `src/port/stm32f1/pm_port_stm32f1.c` 的 `uart_gpio_init()`；
-4. PWM 的 `timer_index` 必须与 port 内 `s_pwm_timer[]` 的顺序一致（当前 0 = TIM2，1 = TIM4）；
+4. PWM 的 `timer_index` 用 `board_timer_id_t`（取值即定时器号：2 = TIM2、3 = TIM3、4 = TIM4）；
+   port 内 `s_pwm_timer[]` 是稠密数组，按 `timer_index - PM_F1_TIMER_FIRST` 索引；
 5. 改链接脚本里的 Flash/RAM 大小（`stm32f103c8.ld`）。
 
 上层 `main.c` 与 `pm_core` 不需要改。

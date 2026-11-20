@@ -24,7 +24,7 @@ cmake --build build-host --config Debug
 ctest --test-dir build-host -C Debug --output-on-failure
 ```
 
-期望输出 `681 checks, 0 failure(s)`，退出码 0。
+期望输出 `689 checks, 0 failure(s)`，退出码 0。
 
 最小单测示例（加到 `tests/host/test_main.c`，并在 `main()` 里调用）：
 
@@ -40,7 +40,7 @@ static void test_ringbuf_minimal(void)
 }
 ```
 
-`CHECK` 宏自己计数，失败时打印文件名与行号；断言总数变化时同步更新 README 里的 681。
+`CHECK` 宏自己计数，失败时打印文件名与行号；断言总数变化时同步更新 README 里的断言数（当前 689）。
 
 ## 能做什么
 
@@ -86,9 +86,9 @@ static void test_ringbuf_minimal(void)
 | --- | --- | --- |
 | 时钟 | HSE→PLL 72 MHz | `pm_clock_init()` 配置；HSE 起振失败回落 HSI 8 MHz，`pm_platform_core_clock()` 可读实际主频 |
 | ARM 交叉编译 | 通过 | `arm-none-eabi-gcc 14.3.1`，无项目代码警告 |
-| 链接 | 通过 | Flash 28436 B / 64 KB（43.39%），RAM 3384 B / 20 KB（16.52%） |
-| 产物 | 已生成 | `pm_f103_demo`（ELF）/ `.bin`（28436 B）/ `.hex` / `.map` |
-| 主机单测 | 通过 | 681 项断言，0 失败（MSVC 19.51，C11） |
+| 链接 | 通过 | Flash 28492 B / 64 KB（43.48%），RAM 3384 B / 20 KB（16.52%） |
+| 产物 | 已生成 | `pm_f103_demo`（ELF）/ `.bin`（28492 B）/ `.hex` / `.map` |
+| 主机单测 | 通过 | 689 项断言，0 失败（MSVC 19.51，C11） |
 | 动态分配 | 不存在 | `nm` 中无 `malloc` / `free` / `_sbrk` |
 | 向量表 | 正确 | 首字 `0x20005000`（20 KB RAM 顶），Reset_Handler `0x08000229`（Thumb） |
 | **上板运行** | **部分验证** | 时钟与 UART 收发已在真实板卡上验证；I2C 已用板载 AHT20（0x70）验证触发/读取时序；SPI、ADC、PWM、音调、循迹、编码器、继电器、电机、舵机未接真实器件/负载 |
@@ -115,8 +115,9 @@ v0.6 一行取自本次工作树的构建输出（提交后可用同一命令复
 组合层、`pm_timer` 探测钩子与 `pm_i2c` 分类/计数，RAM 只增一个对象字段的尾部填充。
 
 2026-11-20 复测（同口径：`gnu-tools-for-stm32 14.3.1+st.2`、`-Os -g3
--ffunction-sections -fdata-sections`、全新临时构建目录）：FLASH 28436 B（43.39%）、
-RAM 3384 B（16.52%），与 v0.6 一行**复测一致**；`pm_motor.c` 的入参判断改动没有改变体积。
+-ffunction-sections -fdata-sections`、全新临时构建目录）：FLASH 28492 B（43.48%）、
+RAM 3384 B（16.52%）。比 v0.6 一行多 56 B，来自 `pm_pwm_timing_matches()` 改用 64 位
+交叉相乘比较；RAM 不变。
 
 v0.5 一行取自本次工作树的构建输出（提交后可用同一命令复现）；增量主要是 HAL TIM 更新
 中断路径、三组引脚/上下文表与 `pm_timer` 静态占用表（8 条）。
@@ -261,7 +262,7 @@ ctest --test-dir build-host -C Debug --output-on-failure
 ```
 
 `ctest` 与直接跑 `build-host/Debug/pm_host_tests.exe` 等价，二者之一即可；
-输出形如 `681 checks, 0 failure(s)`，退出码 0 表示全过。
+输出形如 `689 checks, 0 failure(s)`，退出码 0 表示全过。
 
 ---
 
@@ -456,9 +457,9 @@ static const pm_pwm_cfg_t servo_cfg = {
 - 时基由端口决定（本板舵机 PSC 71 / ARR 19999、电机 PSC 0 / ARR 3599，均已实测）；
   端口写寄存器前必须用 `pm_pwm_timing_matches()` 在 10‰ 容差内复核，`timing_compute()` 只是可选工具；
 - `pm_pwm_set_pulse_us` 按当前频率换算，超过一个周期截断到 1000‰；
-- **同一定时器的通道共享周期**：PA0/PA1 同属 TIM2，PB8/PB9 同属 TIM4。
+- **同一定时器的通道共享周期**：PA0/PA1 同属 TIM2，PB8 是 TIM4 在本板唯一开出的通道。
   兄弟通道已打开且频率不同时，第二个 `init` 返回 `PM_ERR_BUSY`，不会静默改期；
-  因此舵机（50 Hz）与蜂鸣器（约 2 kHz）不能同时在 TIM4 上运行。
+  蜂鸣器走 TIM3 软件音调（见下文"音调 / 循迹 / 编码器"），不占 TIM4，与舵机可同时运行。
 
 完整规则见 [docs/00-contract.md](docs/00-contract.md) 第 14 节。
 
@@ -531,7 +532,8 @@ if (pm_encoder_button(&s_enc, &pressed) == PM_OK && pressed) {
 ```
 
 - 音调的 tick 长度、占空比量化是端口实现细节，**不要在应用里依赖**；
-- 音调与 PWM 蜂鸣器在 PB9 上互斥，后开的返回 `PM_ERR_CONFLICT`；
+- 音调与（另行接线的）PWM 蜂鸣器在 PB9 上互斥，后开的返回 `PM_ERR_CONFLICT`；本板默认
+  只有软件音调，PB9 不开 TIM4 通道；
 - 循迹与 SPI2 在 PB14 上互斥，后开的返回 `PM_ERR_CONFLICT`；
 - 编码器 `count` 由 ISR 写、主循环读；`pm_encoder_reset()` 不是中断安全的；
 - 按键未配置时 `pm_encoder_init` 仍成功，`pm_encoder_button` 返回 `PM_ERR_DISABLED` 且
@@ -641,10 +643,10 @@ Actions 步骤尚未在 CI 中执行过；固件作业的 14.3.rel1 下载地址
 
 - DMA 抽象、RTC、Flash、看门狗尚未实现；
 - ADC 只做单通道、单次、软件触发；没有扫描、连续转换、注入通道与 DMA；未上板验证；
-- PWM 只做比较输出（PWM 模式 1）；同一 TIM 的通道共享周期，舵机与蜂鸣器不能以不同
-  频率同时挂在 TIM4；未上板验证；
+- PWM 只做比较输出（PWM 模式 1）；同一 TIM 的通道共享周期，TIM2 两路电机必须同频；
+  本板 TIM4 只开舵机一路（蜂鸣器走 TIM3 软件音调，不占 TIM4）；未上板验证；
 - 软件音调只做单音方波，不做包络/音量/多音混合；每 10 µs 一次更新中断，满频 5 kHz 时
-  中断率约 100 kHz；与 PWM 蜂鸣器在 PB9 上互斥；未上板，声学未验证；
+  中断率约 100 kHz；仅另行接 PWM 蜂鸣器时才在 PB9 上互斥；未上板，声学未验证；
 - 循迹只做单路数字量，不做多路阵列、阈值自适应与去抖；与 SPI2 在 PB14 上互斥；未上板；
 - 编码器只做 AB x4 计数，不做测速、Z 相与方向滤波；`reset` 非中断安全；按键是可选能力，
   本板 PB15 与 SPI2_MOSI 复用；未上板；

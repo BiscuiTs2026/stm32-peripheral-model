@@ -36,8 +36,10 @@ pm_err_t pm_pwm_timing_compute(uint32_t timer_clk_hz, uint32_t freq_hz,
 /* Self-check for timing that was not produced by pm_pwm_timing_compute()
  * (hand-written registers, a formerly verified board config, a bug fix).
  * Returns true when the PSC/ARR pair produces freq_hz within
- * `tolerance_permille` thousandths. Example: 72 MHz, PSC 0, ARR 19999 is
- * 3.6 kHz, so it does NOT match 50 Hz. */
+ * `tolerance_permille` thousandths. Cross-multiplies instead of rounding the
+ * actual frequency first, so a legal pair is not rejected at its own
+ * tolerance edge. Example: 72 MHz, PSC 0, ARR 19999 is 3.6 kHz, so it does
+ * NOT match 50 Hz. */
 bool pm_pwm_timing_matches(uint32_t timer_clk_hz, uint16_t psc, uint16_t arr,
                            uint32_t freq_hz, uint16_t tolerance_permille);
 

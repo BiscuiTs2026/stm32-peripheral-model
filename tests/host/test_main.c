@@ -1170,6 +1170,18 @@ static void test_pwm_math(void)
     CHECK(pm_pwm_timing_matches(72000000u, 71u, 19999u, 50u, 10u) == true);
     CHECK(pm_pwm_timing_matches(72000000u, 0u, 19999u, 3600u, 10u) == true);
 
+    /* Boundary: each pair rounds to the requested integer frequency but is
+     * not exact, so tolerance 0 must reject and 1 permille must accept.
+     * (Round-first comparisons used to accept these at tolerance 0.) */
+    CHECK(pm_pwm_timing_matches(72000000u, 407u, 391u, 450u, 0u) == false); /* 450.18 Hz */
+    CHECK(pm_pwm_timing_matches(72000000u, 407u, 391u, 450u, 1u) == true);
+    CHECK(pm_pwm_timing_matches(72000000u, 409u, 389u, 450u, 0u) == false); /* 450.28 Hz */
+    CHECK(pm_pwm_timing_matches(72000000u, 409u, 389u, 450u, 1u) == true);
+    CHECK(pm_pwm_timing_matches(72000000u, 389u, 368u, 500u, 0u) == false); /* 500.31 Hz */
+    CHECK(pm_pwm_timing_matches(72000000u, 389u, 368u, 500u, 1u) == true);
+    CHECK(pm_pwm_timing_matches(72000000u, 401u, 357u, 500u, 0u) == false); /* 500.29 Hz */
+    CHECK(pm_pwm_timing_matches(72000000u, 401u, 357u, 500u, 1u) == true);
+
     CHECK(pm_pwm_compare_count(19999u, 75u) == 1500u);
     CHECK(pm_pwm_compare_count(19999u, 0u) == 0u);
     CHECK(pm_pwm_compare_count(19999u, 1000u) == 20000u);
@@ -1197,9 +1209,9 @@ static void test_timer_arbiter(void)
     pm_timer_claim_t other;
 
     pm_timer_reset();
-    CHECK(pm_timer_claims(0u) == 0u);
+    CHECK(pm_timer_claims(2u) == 0u);
 
-    pwm0.hw_id    = 0u;
+    pwm0.hw_id    = 2u;             /* board numbering: 2 = TIM2 */
     pwm0.owner_id = 0u;
     pwm0.role     = PM_TIMER_ROLE_PWM;
     pwm0.psc      = 21u;
@@ -1208,16 +1220,16 @@ static void test_timer_arbiter(void)
 
     CHECK(pm_timer_check(&pwm0) == PM_OK);
     CHECK(pm_timer_claim(&pwm0) == PM_OK);
-    CHECK(pm_timer_claims(0u) == 1u);
+    CHECK(pm_timer_claims(2u) == 1u);
     CHECK(pm_timer_claim(&pwm0) == PM_OK);          /* identical re-claim */
-    CHECK(pm_timer_claims(0u) == 1u);
+    CHECK(pm_timer_claims(2u) == 1u);
 
     /* Same period, different channel: allowed. */
     pwm1 = pwm0;
     pwm1.owner_id = 1u;
     pwm1.channels = 0x02u;
     CHECK(pm_timer_claim(&pwm1) == PM_OK);
-    CHECK(pm_timer_claims(0u) == 2u);
+    CHECK(pm_timer_claims(2u) == 2u);
 
     /* Same channel: conflict. */
     other = pwm1;
@@ -1237,8 +1249,8 @@ static void test_timer_arbiter(void)
     other.channels = 0u;
     CHECK(pm_timer_claim(&other) == PM_ERR_CONFLICT);
 
-    /* Free-running counter on another timer. */
-    other.hw_id = 1u;
+    /* Free-running counter on another timer (3 = TIM3). */
+    other.hw_id = 3u;
     other.owner_id = 5u;
     other.role = PM_TIMER_ROLE_COUNTER;
     other.psc = 0u;
@@ -1259,19 +1271,19 @@ static void test_timer_arbiter(void)
     {
         pm_timer_claim_t pwmbad = pwm0;
 
-        pwmbad.hw_id = 1u;
+        pwmbad.hw_id = 3u;
         pwmbad.owner_id = 6u;
         CHECK(pm_timer_claim(&pwmbad) == PM_ERR_CONFLICT);
     }
 
     /* Retiming updates every PWM claim on that timer. */
-    CHECK(pm_timer_retime(0u, 1u, 31u, 64499u) == PM_OK);
-    CHECK(pm_timer_retime(0u, 9u, 31u, 64499u) == PM_ERR_STATE);
+    CHECK(pm_timer_retime(2u, 1u, 31u, 64499u) == PM_OK);
+    CHECK(pm_timer_retime(2u, 9u, 31u, 64499u) == PM_ERR_STATE);
 
     /* Release removes only that owner. */
-    CHECK(pm_timer_release(0u, 0u) == PM_OK);
-    CHECK(pm_timer_claims(0u) == 1u);
-    CHECK(pm_timer_release(0u, 0u) == PM_ERR_STATE);
+    CHECK(pm_timer_release(2u, 0u) == PM_OK);
+    CHECK(pm_timer_claims(2u) == 1u);
+    CHECK(pm_timer_release(2u, 0u) == PM_ERR_STATE);
 
     /* Table capacity: 8 entries, the ninth distinct timer is refused. */
     pm_timer_reset();
@@ -1303,19 +1315,19 @@ static void test_timer_arbiter(void)
        (the board reads TIM2->CNT for echo while the motor runs) must be
        refused, not silently reconfigured. */
     pm_timer_reset();
-    s_probe_busy_id = 5u;
+    s_probe_busy_id = 2u;           /* TIM2 is the echo counter on the board */
     s_probe_calls   = 0;
     pm_timer_set_probe(timer_probe, NULL);
     {
         pm_timer_claim_t busy = pwm0;
 
-        busy.hw_id    = 5u;
+        busy.hw_id    = 2u;
         busy.owner_id = 3u;
         CHECK(pm_timer_check(&busy) == PM_ERR_CONFLICT);   /* dry run sees it */
         CHECK(pm_timer_claim(&busy) == PM_ERR_CONFLICT);
-        CHECK(pm_timer_claims(5u) == 0u);                  /* nothing recorded */
+        CHECK(pm_timer_claims(2u) == 0u);                  /* nothing recorded */
 
-        /* Idle timer on the same run goes through. */
+        /* Idle timer on the same run goes through (4 = TIM4). */
         busy.hw_id = 4u;
         CHECK(pm_timer_claim(&busy) == PM_OK);
         CHECK(pm_timer_claims(4u) == 1u);

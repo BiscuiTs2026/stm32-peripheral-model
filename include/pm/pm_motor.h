@@ -88,9 +88,9 @@ struct pm_motor {
 };
 
 /* Both channels must already be open and share one frequency. Returns
- * PM_ERR_PARAM for an unset invert or identical channel pointers,
- * PM_ERR_STATE for a closed channel, PM_ERR_CONFLICT for a frequency
- * mismatch, PM_ERR_BUSY when the object is already open. */
+ * PM_ERR_PARAM for an invert outside UNSET/OFF/ON or identical channel
+ * pointers, PM_ERR_STATE for a closed channel, PM_ERR_CONFLICT for a
+ * frequency mismatch, PM_ERR_BUSY when the object is already open. */
 pm_err_t pm_motor_init(pm_motor_t *m, const pm_motor_cfg_t *cfg);
 
 /* Coasts the bridge and releases the model. Idempotent. */

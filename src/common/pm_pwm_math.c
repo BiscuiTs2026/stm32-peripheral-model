@@ -63,21 +63,27 @@ pm_err_t pm_pwm_timing_compute(uint32_t timer_clk_hz, uint32_t freq_hz,
 bool pm_pwm_timing_matches(uint32_t timer_clk_hz, uint16_t psc, uint16_t arr,
                            uint32_t freq_hz, uint16_t tolerance_permille)
 {
-    uint32_t divisor;
-    uint32_t actual;
-    uint32_t diff;
+    uint64_t divisor;
+    uint64_t scaled_clk;
+    uint64_t scaled_req;
+    uint64_t diff;
+    uint64_t allowed;
 
     if ((timer_clk_hz == 0u) || !freq_valid(freq_hz)) {
         return false;
     }
-    divisor = ((uint32_t)psc + 1u) * ((uint32_t)arr + 1u);
-    actual  = timer_clk_hz / divisor;
-    if (actual == 0u) {
-        return false;
-    }
 
-    diff = (actual > freq_hz) ? (actual - freq_hz) : (freq_hz - actual);
-    return ((uint64_t)diff * 1000u <= (uint64_t)freq_hz * tolerance_permille);
+    /* Cross-multiply instead of rounding the actual frequency first: with
+     * floor(timer_clk / divisor) a legal pair can fall just outside its own
+     * tolerance window (449.9 Hz floored to 449 against a 450 Hz request),
+     * and the board implementation compares the same way. */
+    divisor    = ((uint64_t)psc + 1u) * ((uint64_t)arr + 1u);
+    scaled_clk = (uint64_t)timer_clk_hz * 1000u;
+    scaled_req = (uint64_t)freq_hz * 1000u * divisor;
+    diff       = (scaled_clk > scaled_req) ? (scaled_clk - scaled_req)
+                                           : (scaled_req - scaled_clk);
+    allowed    = (uint64_t)freq_hz * tolerance_permille * divisor;
+    return diff <= allowed;
 }
 
 uint16_t pm_pwm_compare_count(uint16_t arr, uint16_t permille)

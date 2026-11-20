@@ -10,7 +10,7 @@
 三条都过才算完成；任一失败不带病提交。
 
 ```powershell
-# 1. 主机单测（681 项断言，0 失败）
+# 1. 主机单测（689 项断言，0 失败）
 cmake -S tests/host -B build-host
 cmake --build build-host --config Debug
 ctest --test-dir build-host -C Debug --output-on-failure

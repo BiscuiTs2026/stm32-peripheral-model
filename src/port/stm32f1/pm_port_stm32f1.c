@@ -1418,7 +1418,8 @@ static uint32_t f1_apb1_timer_clock(void)
  * remapped a timer to other pins. Both leave a mark that needs no cooperation
  * from the other driver: a running counter (CR1.CEN) or a non-zero AFIO remap.
  * Reading registers only; the probe never writes.
- * timer_index follows board_timer_id_t: 0 = TIM2, 1 = TIM3, 2 = TIM4. */
+ * timer_index follows board_timer_id_t and equals the timer number:
+ * 2 = TIM2, 3 = TIM3, 4 = TIM4. */
 static bool f1_timer_externally_busy(void *ctx, uint8_t hw_id)
 {
     TIM_TypeDef *inst;
@@ -1426,15 +1427,15 @@ static bool f1_timer_externally_busy(void *ctx, uint8_t hw_id)
 
     (void)ctx;
     switch (hw_id) {
-    case 0u:
+    case 2u:
         inst       = TIM2;
         remap_mask = 0x00000300u;   /* AFIO_MAPR TIM2_REMAP[1:0] */
         break;
-    case 1u:
+    case 3u:
         inst       = TIM3;
         remap_mask = 0x00000C00u;   /* AFIO_MAPR TIM3_REMAP[1:0] */
         break;
-    case 2u:
+    case 4u:
         inst       = TIM4;
         remap_mask = 0x00001000u;   /* AFIO_MAPR TIM4_REMAP */
         break;
@@ -1453,6 +1454,7 @@ static bool f1_timer_externally_busy(void *ctx, uint8_t hw_id)
 /* ------------------------------------------------------------------- PWM */
 
 #define PM_F1_PWM_COUNT       4u
+#define PM_F1_TIMER_FIRST     2u      /* board_timer_id_t value of TIM2 */
 #define PM_F1_PWM_TIMER_COUNT 3u
 #define PM_F1_PWM_NO_CHANNEL  0xFFu
 
@@ -1473,7 +1475,8 @@ typedef struct {
     uint16_t permille;
 } pm_f1_pwm_ch_t;
 
-/* timer_index uses board_timer_id_t: 0 = TIM2, 1 = TIM3, 2 = TIM4. */
+/* timer_index uses board_timer_id_t, i.e. the timer number: 2/3/4 = TIM2/3/4.
+ * The array is dense, so index it by (timer_index - PM_F1_TIMER_FIRST). */
 static pm_f1_pwm_timer_t s_pwm_timer[PM_F1_PWM_TIMER_COUNT] = {
     { .inst = TIM2 },
     { .inst = TIM3 },
@@ -1586,7 +1589,8 @@ static pm_err_t f1_pwm_open(void *ctx, pm_pwm_t *p, const pm_pwm_cfg_t *cfg,
     if ((pins->port == NULL) || (pins->pin == 0u) || (pins->inst == NULL)) {
         return PM_ERR_PARAM;
     }
-    if (pins->timer_index >= PM_F1_PWM_TIMER_COUNT) {
+    if ((pins->timer_index < PM_F1_TIMER_FIRST) ||
+        (pins->timer_index >= (PM_F1_TIMER_FIRST + PM_F1_PWM_TIMER_COUNT))) {
         return PM_ERR_PARAM;
     }
     ci = pwm_channel_index(pins->channel);
@@ -1594,7 +1598,7 @@ static pm_err_t f1_pwm_open(void *ctx, pm_pwm_t *p, const pm_pwm_cfg_t *cfg,
         return PM_ERR_PARAM;
     }
 
-    t = &s_pwm_timer[pins->timer_index];
+    t = &s_pwm_timer[pins->timer_index - PM_F1_TIMER_FIRST];
     if (t->inst != pins->inst) {
         return PM_ERR_PARAM;
     }
@@ -1710,7 +1714,7 @@ static void f1_pwm_close(void *ctx, pm_pwm_t *p)
         return;
     }
     pins = &c->pins[p->hw_id];
-    t    = &s_pwm_timer[pins->timer_index];
+    t    = &s_pwm_timer[pins->timer_index - PM_F1_TIMER_FIRST];
 
     (void)HAL_TIM_PWM_Stop(&t->htim, pins->channel);
     t->open_mask = (uint8_t)(t->open_mask & (uint8_t)~(1u << ch->ch_index));
@@ -1753,7 +1757,7 @@ static pm_err_t f1_pwm_set_freq(void *ctx, pm_pwm_t *p, uint32_t freq_hz,
         return PM_ERR_STATE;
     }
     pins = &c->pins[p->hw_id];
-    t    = &s_pwm_timer[pins->timer_index];
+    t    = &s_pwm_timer[pins->timer_index - PM_F1_TIMER_FIRST];
 
     other = (uint32_t)(t->open_mask & (uint8_t)~(1u << ch->ch_index));
     if ((other != 0u) && (t->freq_req != freq_hz)) {
@@ -1811,7 +1815,7 @@ static pm_err_t f1_pwm_set_duty(void *ctx, pm_pwm_t *p, uint16_t permille)
         return PM_ERR_STATE;
     }
     pins = &c->pins[p->hw_id];
-    t    = &s_pwm_timer[pins->timer_index];
+    t    = &s_pwm_timer[pins->timer_index - PM_F1_TIMER_FIRST];
 
     __HAL_TIM_SET_COMPARE(&t->htim, pins->channel,
                           pm_pwm_compare_count(t->arr, permille));
@@ -1839,7 +1843,7 @@ static pm_err_t f1_pwm_enable(void *ctx, pm_pwm_t *p, bool on)
         return PM_ERR_STATE;
     }
     pins = &c->pins[p->hw_id];
-    t    = &s_pwm_timer[pins->timer_index];
+    t    = &s_pwm_timer[pins->timer_index - PM_F1_TIMER_FIRST];
 
     st = on ? HAL_TIM_PWM_Start(&t->htim, pins->channel)
             : HAL_TIM_PWM_Stop(&t->htim, pins->channel);

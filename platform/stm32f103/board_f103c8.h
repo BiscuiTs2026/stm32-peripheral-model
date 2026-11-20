@@ -56,7 +56,10 @@ typedef enum {
 
 /* Logical PWM channels.
  *   TIM2 CH1/CH2 = PA0/PA1: DRV8833 motor A/B
- *   TIM4 CH3/CH4 = PB8/PB9: servo / passive buzzer
+ *   TIM4 CH3     = PB8: servo
+ *   TIM4 CH4     = PB9: optional PWM buzzer, NOT wired on this board. The
+ *                  board buzzer is driven by the TIM3 software tone instead
+ *                  (see board_tone_id_t), so TIM4 keeps only the servo.
  * Channels that share a timer share the period (see pm_pwm.h). */
 typedef enum {
     BOARD_PWM_MOTOR_A = 0,  /* PA0, TIM2_CH1 */
@@ -67,17 +70,18 @@ typedef enum {
 } board_pwm_id_t;
 
 /* Logical timer ids, used by pm_timer.h claims and by the PWM timer table.
- * TIM2 has no remap option for PA0/PA1 on this package, so motor PWM and a
- * free-running TIM2 counter cannot coexist (docs/00-contract.md section 20). */
+ * The value IS the timer number (2 = TIM2 ... 4 = TIM4), matching the
+ * reference manual and board logs. TIM2 has no remap option for PA0/PA1 on
+ * this package, so motor PWM and a free-running TIM2 counter cannot coexist
+ * (docs/00-contract.md section 20). */
 typedef enum {
-    BOARD_TIM_2 = 0,
-    BOARD_TIM_3,
-    BOARD_TIM_4,
-    BOARD_TIM_COUNT
+    BOARD_TIM_2 = 2,
+    BOARD_TIM_3 = 3,
+    BOARD_TIM_4 = 4
 } board_timer_id_t;
 
-/* Software-tone outputs. PB9 is also BOARD_PWM_BUZZER: the two backends must
- * not be open at the same time. */
+/* Software-tone outputs. PB9 is also BOARD_PWM_BUZZER (optional, not wired):
+ * if that backend is ever connected, the two must not be open at once. */
 typedef enum {
     BOARD_TONE_BUZZER = 0,  /* PB9 via TIM3 update interrupt */
     BOARD_TONE_COUNT
