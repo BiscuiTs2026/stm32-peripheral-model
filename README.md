@@ -625,6 +625,10 @@ python3 tools/check_layering.py . --roles .arch-roles
 CI 的固件工具链钉在 14.3.rel1，与本地 `gnu-tools-for-stm32 14.3.1+st.2`（ST 打包）同主版本；
 若该下载地址日后失效，需同步改 `ci.yml` 与本节，不要让版本静默漂移。
 
+**未在本地实测的部分**：主机作业的 `ctest` 命令在本地 Windows 跑过（1/1 通过），但作为
+Actions 步骤尚未在 CI 中执行过；固件作业的 14.3.rel1 下载地址与工具链包本地无法获取，
+同样未实测。两者首次生效都以 CI 实际结果为准，不要当作已验证。
+
 **项目约定：编译告警即错误，不许为"编过"关掉。** 主机单测用 `/W4`（MSVC）或
 `-Wall -Wextra -Wshadow -Werror`（GCC），固件构建同样把隐式声明当错误。v0.5 就有一个
 真实例子：`pm_port_stm32f1.c` 用了 `memset` 但漏 `#include <string.h>`，被

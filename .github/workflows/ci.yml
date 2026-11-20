@@ -20,6 +20,7 @@ jobs:
       - name: 构建
         run: cmake --build build-host --config Release
       - name: 运行（CTest）
+        # 该命令已在本地 Windows 实测（1/1 通过）；作为 Actions 步骤尚未在 CI 中跑过。
         run: ctest --test-dir build-host -C Release --output-on-failure
 
   firmware:
@@ -33,6 +34,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends ninja-build
       - name: 下载固定版本 arm-none-eabi-gcc（14.3.rel1）
         # 与 README「构建」声明的 14.x 对齐；升级时同步改这里的版本号与 README。
+        # 未在本地实测：该下载地址与工具链包本地无法获取，首次生效以 CI 结果为准。
         run: |
           curl -fsSL -o /tmp/arm-gnu.tar.xz \
             https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi.tar.xz
