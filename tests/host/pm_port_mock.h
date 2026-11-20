@@ -12,7 +12,7 @@
 #define MOCK_I2C_COUNT  2u
 #define MOCK_ADC_COUNT  1u
 #define MOCK_ADC_CHANNELS 2u
-#define MOCK_PWM_COUNT  4u
+#define MOCK_PWM_COUNT  3u
 #define MOCK_TONE_COUNT 1u
 #define MOCK_TRACK_COUNT 1u
 #define MOCK_ENCODER_COUNT 1u
@@ -67,6 +67,9 @@ int             mock_pwm_is_open(uint8_t hw_id);
 uint32_t        mock_pwm_frequency(uint8_t hw_id);
 uint16_t        mock_pwm_duty(uint8_t hw_id);
 int             mock_pwm_is_enabled(uint8_t hw_id);
+/* Declare one PWM channel as sharing its pin with tone channel 0, so the
+ * "one pin, one backend" rule can be exercised (0xFF cancels). */
+void            mock_pwm_share_tone_pin(uint8_t pwm_id);
 
 /* Tone: the mock records the last parameters and whether the tick is on. */
 int             mock_tone_is_open(uint8_t hw_id);

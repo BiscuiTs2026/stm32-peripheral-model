@@ -1453,7 +1453,7 @@ static bool f1_timer_externally_busy(void *ctx, uint8_t hw_id)
 #if defined(PM_ENABLE_PWM)
 /* ------------------------------------------------------------------- PWM */
 
-#define PM_F1_PWM_COUNT       4u
+#define PM_F1_PWM_COUNT       3u
 #define PM_F1_TIMER_FIRST     2u      /* board_timer_id_t value of TIM2 */
 #define PM_F1_PWM_TIMER_COUNT 3u
 #define PM_F1_PWM_NO_CHANNEL  0xFFu
@@ -1484,6 +1484,11 @@ static pm_f1_pwm_timer_t s_pwm_timer[PM_F1_PWM_TIMER_COUNT] = {
 };
 
 static pm_f1_pwm_ch_t s_pwm[PM_F1_PWM_COUNT];
+
+#if defined(PM_ENABLE_TONE)
+/* Defined next to pwm_uses_gpio(); declared here because PWM opens first. */
+static bool tone_uses_gpio(GPIO_TypeDef *port, uint16_t pin);
+#endif
 
 static uint8_t pwm_channel_index(uint32_t channel)
 {
@@ -1589,6 +1594,12 @@ static pm_err_t f1_pwm_open(void *ctx, pm_pwm_t *p, const pm_pwm_cfg_t *cfg,
     if ((pins->port == NULL) || (pins->pin == 0u) || (pins->inst == NULL)) {
         return PM_ERR_PARAM;
     }
+#if defined(PM_ENABLE_TONE)
+    /* Symmetric with the tone side: a pin belongs to one backend only. */
+    if (tone_uses_gpio(pins->port, pins->pin)) {
+        return PM_ERR_CONFLICT;
+    }
+#endif
     if ((pins->timer_index < PM_F1_TIMER_FIRST) ||
         (pins->timer_index >= (PM_F1_TIMER_FIRST + PM_F1_PWM_TIMER_COUNT))) {
         return PM_ERR_PARAM;
@@ -1915,7 +1926,7 @@ static IRQn_Type tone_irqn(TIM_TypeDef *inst)
 }
 
 #if defined(PM_ENABLE_PWM)
-/* PB9 is both BOARD_PWM_BUZZER and BOARD_TONE_BUZZER. */
+/* Called by the tone side: is this pin already driven by an open PWM channel? */
 static bool pwm_uses_gpio(GPIO_TypeDef *port, uint16_t pin)
 {
     uint8_t i;
@@ -1932,6 +1943,24 @@ static bool pwm_uses_gpio(GPIO_TypeDef *port, uint16_t pin)
     }
     return false;
 }
+
+#if defined(PM_ENABLE_TONE)
+/* Called by the PWM side: mirror of pwm_uses_gpio(). No channel on this board
+ * shares PB9 with the tone any more, but boards that do must not be able to
+ * steal the pin by opening PWM second. */
+static bool tone_uses_gpio(GPIO_TypeDef *port, uint16_t pin)
+{
+    uint8_t i;
+
+    for (i = 0u; i < PM_F1_TONE_COUNT; i++) {
+        if ((s_tone[i].opened != 0u) && (s_tone[i].port == port) &&
+            (s_tone[i].pin == pin)) {
+            return true;
+        }
+    }
+    return false;
+}
+#endif
 #endif
 
 static void tone_apply(pm_f1_tone_t *s, uint32_t freq_hz, uint16_t permille)

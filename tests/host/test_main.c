@@ -1043,7 +1043,7 @@ static pm_pwm_t s_pwm;
 static void make_pwm_cfg(pm_pwm_cfg_t *cfg)
 {
     memset(cfg, 0, sizeof(*cfg));
-    cfg->hw_id         = 3u;      /* buzzer */
+    cfg->hw_id         = 2u;      /* arbitrary valid channel */
     cfg->freq_hz       = 2000u;
     cfg->duty_permille = 200u;    /* 20 % */
 }
@@ -1072,19 +1072,25 @@ static void test_pwm_validation(void)
     cfg.hw_id = MOCK_PWM_COUNT;
     CHECK(pm_pwm_init(&s_pwm, &cfg) == PM_ERR_RANGE);
 
+    /* BOARD_PWM_BUZZER was removed: PB9 has no PWM channel, so the old id 3
+     * must be rejected even though it used to be the top channel. */
+    make_pwm_cfg(&cfg);
+    cfg.hw_id = 3u;
+    CHECK(pm_pwm_init(&s_pwm, &cfg) == PM_ERR_RANGE);
+
     make_pwm_cfg(&cfg);
     CHECK(pm_pwm_init(&s_pwm, &cfg) == PM_OK);
-    CHECK(mock_pwm_is_open(3u) == 1);
-    CHECK(mock_pwm_frequency(3u) == 2000u);
-    CHECK(mock_pwm_duty(3u) == 200u);
-    CHECK(mock_pwm_is_enabled(3u) == 1);
+    CHECK(mock_pwm_is_open(2u) == 1);
+    CHECK(mock_pwm_frequency(2u) == 2000u);
+    CHECK(mock_pwm_duty(2u) == 200u);
+    CHECK(mock_pwm_is_enabled(2u) == 1);
     CHECK(pm_pwm_frequency_hz(&s_pwm) == 2000u);
     CHECK(pm_pwm_duty_permille(&s_pwm) == 200u);
 
     CHECK(pm_pwm_init(&s_pwm, &cfg) == PM_ERR_BUSY);
 
     CHECK(pm_pwm_deinit(&s_pwm) == PM_OK);
-    CHECK(mock_pwm_is_open(3u) == 0);
+    CHECK(mock_pwm_is_open(2u) == 0);
     CHECK(pm_pwm_frequency_hz(&s_pwm) == 0u);
     CHECK(pm_pwm_duty_permille(&s_pwm) == 0u);
     CHECK(pm_pwm_deinit(&s_pwm) == PM_OK);       /* idempotent */
@@ -1093,6 +1099,35 @@ static void test_pwm_validation(void)
     CHECK(pm_pwm_set_frequency(&s_pwm, 1000u, NULL) == PM_ERR_STATE);
     CHECK(pm_pwm_set_pulse_us(&s_pwm, 1500u) == PM_ERR_STATE);
     CHECK(pm_pwm_enable(&s_pwm, true) == PM_ERR_STATE);
+
+#if defined(PM_ENABLE_TONE)
+    /* One pin belongs to one backend, checked from both sides. */
+    {
+        pm_tone_t    tone;
+        pm_tone_cfg_t tcfg;
+
+        mock_reset();
+        memset(&s_pwm, 0, sizeof(s_pwm));
+        memset(&tone, 0, sizeof(tone));
+        tcfg.hw_id         = 0u;
+        tcfg.freq_hz       = 2000u;
+        tcfg.duty_permille = 50u;
+
+        mock_pwm_share_tone_pin(1u);
+        CHECK(pm_tone_init(&tone, &tcfg) == PM_OK);
+        make_pwm_cfg(&cfg);
+        cfg.hw_id = 1u;                        /* shares the tone pin */
+        CHECK(pm_pwm_init(&s_pwm, &cfg) == PM_ERR_CONFLICT);
+        CHECK(pm_tone_deinit(&tone) == PM_OK);
+
+        /* Reverse order: PWM first, then the tone on the same pin. */
+        CHECK(pm_pwm_init(&s_pwm, &cfg) == PM_OK);
+        memset(&tone, 0, sizeof(tone));
+        CHECK(pm_tone_init(&tone, &tcfg) == PM_ERR_CONFLICT);
+        CHECK(pm_pwm_deinit(&s_pwm) == PM_OK);
+        mock_pwm_share_tone_pin(0xFFu);
+    }
+#endif
 }
 
 static void test_pwm_ops(void)
@@ -1644,7 +1679,6 @@ static void test_motor(void)
     pm_pwm_t a;
     pm_pwm_t b;
     pm_pwm_t c;
-    pm_pwm_t d;
     pm_motor_t m1;
     pm_motor_t m2;
     pm_motor_t mu;
@@ -1655,7 +1689,6 @@ static void test_motor(void)
     memset(&a, 0, sizeof(a));
     memset(&b, 0, sizeof(b));
     memset(&c, 0, sizeof(c));
-    memset(&d, 0, sizeof(d));
     memset(&m1, 0, sizeof(m1));
     memset(&m2, 0, sizeof(m2));
     memset(&mu, 0, sizeof(mu));
@@ -1663,7 +1696,6 @@ static void test_motor(void)
     pwm_open(&a, 0u, 20000u);
     pwm_open(&b, 1u, 20000u);
     pwm_open(&c, 2u, 10000u);   /* deliberately different frequency */
-    pwm_open(&d, 3u, 20000u);
 
     memset(&cfg, 0, sizeof(cfg));
     CHECK(pm_motor_init(NULL, &cfg) == PM_ERR_NULL);
@@ -1759,37 +1791,32 @@ static void test_motor(void)
     CHECK(mock_pwm_duty(1u) != coast_pair[1]);
     CHECK(pm_motor_stop(&m1, PM_MOTOR_STOP_COAST) == PM_OK);
 
-    /* Second instance: invert swaps which input carries the duty. */
-    CHECK(pm_pwm_deinit(&c) == PM_OK);
-    pwm_open(&c, 2u, 20000u);
-    cfg.in1 = &c;
-    cfg.in2 = &d;
-    cfg.invert = PM_MOTOR_INVERT_ON;
-    CHECK(pm_motor_init(&m2, &cfg) == PM_OK);
-
-    CHECK(pm_motor_set(&m1, 600u, PM_MOTOR_DIR_FORWARD) == PM_OK);
-    CHECK(pm_motor_set(&m2, 400u, PM_MOTOR_DIR_FORWARD) == PM_OK);
-    CHECK(mock_pwm_duty(0u) == 600u);   /* m1: IN1 */
-    CHECK(mock_pwm_duty(1u) == 0u);
-    CHECK(mock_pwm_duty(2u) == 0u);     /* m2: inverted -> IN2 */
-    CHECK(mock_pwm_duty(3u) == 400u);
-
-    /* Cross operations: neither instance disturbs the other. */
-    CHECK(pm_motor_stop(&m1, PM_MOTOR_STOP_BRAKE) == PM_OK);
-    CHECK(mock_pwm_duty(2u) == 0u);
-    CHECK(mock_pwm_duty(3u) == 400u);
-    CHECK(pm_motor_state(&m2) == PM_MOTOR_STATE_RUN);
-    CHECK(pm_motor_stop(&m2, PM_MOTOR_STOP_COAST) == PM_OK);
-    CHECK(mock_pwm_duty(0u) == 1000u);
-    CHECK(mock_pwm_duty(1u) == 1000u);
-    CHECK(pm_motor_state(&m1) == PM_MOTOR_STATE_STOP_BRAKE);
-    CHECK(pm_motor_is_running(&m2) == false);
-
+    /* Second instance: invert swaps which input carries the duty. The backend
+     * exposes three channels (two motors + one servo), so m1 is torn down
+     * before m2 opens its pair. */
     CHECK(pm_motor_deinit(&m1) == PM_OK);
     CHECK(mock_pwm_duty(0u) == 0u);
     CHECK(mock_pwm_duty(1u) == 0u);
-    CHECK(pm_motor_deinit(&m1) == PM_OK);               /* idempotent */
-    CHECK(pm_motor_set(&m1, 100u, PM_MOTOR_DIR_FORWARD) == PM_ERR_STATE);
+    CHECK(pm_pwm_deinit(&c) == PM_OK);
+    pwm_open(&c, 2u, 20000u);
+    cfg.in1 = &c;
+    cfg.in2 = &b;
+    cfg.invert = PM_MOTOR_INVERT_ON;
+    CHECK(pm_motor_init(&m2, &cfg) == PM_OK);
+
+    CHECK(pm_motor_set(&m2, 400u, PM_MOTOR_DIR_FORWARD) == PM_OK);
+    CHECK(mock_pwm_duty(2u) == 0u);     /* inverted -> IN2 */
+    CHECK(mock_pwm_duty(1u) == 400u);
+    CHECK(pm_motor_state(&m2) == PM_MOTOR_STATE_RUN);
+
+    CHECK(pm_motor_stop(&m2, PM_MOTOR_STOP_COAST) == PM_OK);
+    CHECK(mock_pwm_duty(2u) == 0u);
+    CHECK(mock_pwm_duty(1u) == 0u);
+    CHECK(mock_pwm_is_open(0u) == 1);   /* m1's channel stayed open, untouched */
+
+    CHECK(pm_motor_deinit(&m2) == PM_OK);
+    CHECK(pm_motor_deinit(&m2) == PM_OK);               /* idempotent */
+    CHECK(pm_motor_set(&m2, 100u, PM_MOTOR_DIR_FORWARD) == PM_ERR_STATE);
 }
 #endif /* PM_ENABLE_MOTOR */
 
@@ -1921,10 +1948,10 @@ static void test_servo(void)
         memset(&other, 0, sizeof(other));
         memset(&ocfg, 0, sizeof(ocfg));
         memset(&busy, 0, sizeof(busy));
-        ocfg.hw_id   = 3u;
+        ocfg.hw_id   = 1u;
         ocfg.freq_hz = 50u;
         CHECK(pm_pwm_init(&other, &ocfg) == PM_OK);
-        bcfg.hw_id = 3u;
+        bcfg.hw_id = 1u;
         CHECK(pm_servo_init(&busy, &bcfg) == PM_ERR_BUSY);
         CHECK(pm_pwm_deinit(&other) == PM_OK);
     }

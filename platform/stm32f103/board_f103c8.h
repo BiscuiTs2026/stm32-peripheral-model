@@ -57,15 +57,13 @@ typedef enum {
 /* Logical PWM channels.
  *   TIM2 CH1/CH2 = PA0/PA1: DRV8833 motor A/B
  *   TIM4 CH3     = PB8: servo
- *   TIM4 CH4     = PB9: optional PWM buzzer, NOT wired on this board. The
- *                  board buzzer is driven by the TIM3 software tone instead
- *                  (see board_tone_id_t), so TIM4 keeps only the servo.
+ * PB9 has no PWM channel: the board buzzer is driven by the TIM3 software
+ * tone (see board_tone_id_t), so TIM4 keeps only the servo.
  * Channels that share a timer share the period (see pm_pwm.h). */
 typedef enum {
     BOARD_PWM_MOTOR_A = 0,  /* PA0, TIM2_CH1 */
     BOARD_PWM_MOTOR_B,      /* PA1, TIM2_CH2 */
     BOARD_PWM_SERVO,        /* PB8, TIM4_CH3 */
-    BOARD_PWM_BUZZER,       /* PB9, TIM4_CH4 */
     BOARD_PWM_COUNT
 } board_pwm_id_t;
 
@@ -80,8 +78,9 @@ typedef enum {
     BOARD_TIM_4 = 4
 } board_timer_id_t;
 
-/* Software-tone outputs. PB9 is also BOARD_PWM_BUZZER (optional, not wired):
- * if that backend is ever connected, the two must not be open at once. */
+/* Software-tone outputs. PB9 carries the tone only; there is no PWM channel
+ * on it (BOARD_PWM_BUZZER was removed). If a board ever maps a PWM channel
+ * to the same pin, the port rejects whichever backend opens second. */
 typedef enum {
     BOARD_TONE_BUZZER = 0,  /* PB9 via TIM3 update interrupt */
     BOARD_TONE_COUNT

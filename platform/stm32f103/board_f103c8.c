@@ -56,8 +56,6 @@ static const pm_f1_pwm_pins_t s_pwm_pins[BOARD_PWM_COUNT] = {
                             BOARD_TIM_2 },
     [BOARD_PWM_SERVO]   = { GPIOB, GPIO_PIN_8, TIM4, TIM_CHANNEL_3,
                             BOARD_TIM_4 },
-    [BOARD_PWM_BUZZER]  = { GPIOB, GPIO_PIN_9, TIM4, TIM_CHANNEL_4,
-                            BOARD_TIM_4 },
 };
 
 const pm_f1_pwm_ctx_t pm_f1_pwm_ctx = {

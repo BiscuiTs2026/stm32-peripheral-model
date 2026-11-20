@@ -64,7 +64,7 @@ static void test_ringbuf_minimal(void)
 | SPI | 未接从机；只验证了主机初始化、中断/DMA 收发路径与主机 mock |
 | I2C | 已用板载 AHT20（0x70）验证读时序；OLED（0x7A）未验证 |
 | ADC | 未接真实信号源；只验证了转换流程与主机 mock |
-| PWM | 未接负载（电机 / 舵机 / 蜂鸣器）；只验证了配置与占空比换算 |
+| PWM | 未接负载（电机 / 舵机）；只验证了配置与占空比换算 |
 | 软件音调 | 未上板；主机 mock 覆盖生命周期与参数校验，声学效果未验证 |
 | 循迹 | 未上板；只验证了极性判定与 PB14/SPI2 互斥逻辑 |
 | 编码器 | 未上板；只验证了 AB x4 解码表与可选按键语义（主机单测）；按键实测见板端工程 |
@@ -86,8 +86,8 @@ static void test_ringbuf_minimal(void)
 | --- | --- | --- |
 | 时钟 | HSE→PLL 72 MHz | `pm_clock_init()` 配置；HSE 起振失败回落 HSI 8 MHz，`pm_platform_core_clock()` 可读实际主频 |
 | ARM 交叉编译 | 通过 | `arm-none-eabi-gcc 14.3.1`，无项目代码警告 |
-| 链接 | 通过 | Flash 28492 B / 64 KB（43.48%），RAM 3384 B / 20 KB（16.52%） |
-| 产物 | 已生成 | `pm_f103_demo`（ELF）/ `.bin`（28492 B）/ `.hex` / `.map` |
+| 链接 | 通过 | Flash 28536 B / 64 KB（43.54%），RAM 3376 B / 20 KB（16.48%） |
+| 产物 | 已生成 | `pm_f103_demo`（ELF）/ `.bin`（28536 B）/ `.hex` / `.map` |
 | 主机单测 | 通过 | 689 项断言，0 失败（MSVC 19.51，C11） |
 | 动态分配 | 不存在 | `nm` 中无 `malloc` / `free` / `_sbrk` |
 | 向量表 | 正确 | 首字 `0x20005000`（20 KB RAM 顶），Reset_Handler `0x08000229`（Thumb） |
@@ -115,9 +115,9 @@ v0.6 一行取自本次工作树的构建输出（提交后可用同一命令复
 组合层、`pm_timer` 探测钩子与 `pm_i2c` 分类/计数，RAM 只增一个对象字段的尾部填充。
 
 2026-11-20 复测（同口径：`gnu-tools-for-stm32 14.3.1+st.2`、`-Os -g3
--ffunction-sections -fdata-sections`、全新临时构建目录）：FLASH 28492 B（43.48%）、
-RAM 3384 B（16.52%）。比 v0.6 一行多 56 B，来自 `pm_pwm_timing_matches()` 改用 64 位
-交叉相乘比较；RAM 不变。
+-ffunction-sections -fdata-sections`、全新临时构建目录）：FLASH 28536 B（43.54%）、
+RAM 3376 B（16.48%）。比 v0.6 一行多 100 B（时基改 64 位交叉相乘 +44 B，PWM 通道减到
+3 路并补 tone 侧检查 +56 B），RAM 少 8 B（少一个通道状态槽）。
 
 v0.5 一行取自本次工作树的构建输出（提交后可用同一命令复现）；增量主要是 HAL TIM 更新
 中断路径、三组引脚/上下文表与 `pm_timer` 静态占用表（8 条）。
@@ -532,8 +532,9 @@ if (pm_encoder_button(&s_enc, &pressed) == PM_OK && pressed) {
 ```
 
 - 音调的 tick 长度、占空比量化是端口实现细节，**不要在应用里依赖**；
-- 音调与（另行接线的）PWM 蜂鸣器在 PB9 上互斥，后开的返回 `PM_ERR_CONFLICT`；本板默认
-  只有软件音调，PB9 不开 TIM4 通道；
+- 音调与 PWM 后端按引脚互斥：若板级表另行给 PB9 加回 PWM 通道，两个后端同时 open 时
+  后开的返回 `PM_ERR_CONFLICT`（两侧都检查，不依赖调用顺序）；本板默认只有软件音调，
+  PB9 没有 PWM 通道；
 - 循迹与 SPI2 在 PB14 上互斥，后开的返回 `PM_ERR_CONFLICT`；
 - 编码器 `count` 由 ISR 写、主循环读；`pm_encoder_reset()` 不是中断安全的；
 - 按键未配置时 `pm_encoder_init` 仍成功，`pm_encoder_button` 返回 `PM_ERR_DISABLED` 且
@@ -646,7 +647,8 @@ Actions 步骤尚未在 CI 中执行过；固件作业的 14.3.rel1 下载地址
 - PWM 只做比较输出（PWM 模式 1）；同一 TIM 的通道共享周期，TIM2 两路电机必须同频；
   本板 TIM4 只开舵机一路（蜂鸣器走 TIM3 软件音调，不占 TIM4）；未上板验证；
 - 软件音调只做单音方波，不做包络/音量/多音混合；每 10 µs 一次更新中断，满频 5 kHz 时
-  中断率约 100 kHz；仅另行接 PWM 蜂鸣器时才在 PB9 上互斥；未上板，声学未验证；
+  中断率约 100 kHz；本板 PB9 没有 PWM 通道，仅板级表另行加回时才与音调按引脚互斥；
+  未上板，声学未验证；
 - 循迹只做单路数字量，不做多路阵列、阈值自适应与去抖；与 SPI2 在 PB14 上互斥；未上板；
 - 编码器只做 AB x4 计数，不做测速、Z 相与方向滤波；`reset` 非中断安全；按键是可选能力，
   本板 PB15 与 SPI2_MOSI 复用；未上板；

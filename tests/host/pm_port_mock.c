@@ -471,6 +471,12 @@ static const pm_adc_ops_t s_adc_ops = {
 
 #endif /* PM_ENABLE_ADC */
 
+#if defined(PM_ENABLE_TONE)
+/* Declared early: the PWM section below consults it for the shared-pin rule.
+ * The mock is not the board; this flag exists only to exercise that rule. */
+static uint8_t s_tone_open[MOCK_TONE_COUNT];
+#endif
+
 #if defined(PM_ENABLE_PWM)
 /* ------------------------------------------------------------------- PWM */
 
@@ -478,6 +484,7 @@ static uint8_t  s_pwm_open[MOCK_PWM_COUNT];
 static uint8_t  s_pwm_enabled[MOCK_PWM_COUNT];
 static uint32_t s_pwm_freq[MOCK_PWM_COUNT];
 static uint16_t s_pwm_duty[MOCK_PWM_COUNT];
+static uint8_t  s_pwm_tone_shared = 0xFFu;
 
 static pm_err_t mock_pwm_open(void *ctx, pm_pwm_t *p, const pm_pwm_cfg_t *cfg,
                               uint32_t *actual_hz)
@@ -491,6 +498,11 @@ static pm_err_t mock_pwm_open(void *ctx, pm_pwm_t *p, const pm_pwm_cfg_t *cfg,
     if (s_pwm_open[cfg->hw_id] != 0u) {
         return PM_ERR_BUSY;
     }
+#if defined(PM_ENABLE_TONE)
+    if ((cfg->hw_id == s_pwm_tone_shared) && (s_tone_open[0] != 0u)) {
+        return PM_ERR_CONFLICT;      /* the tone already drives this pin */
+    }
+#endif
 
     s_pwm_open[cfg->hw_id]    = 1u;
     s_pwm_enabled[cfg->hw_id] = 1u;
@@ -560,7 +572,6 @@ static const pm_pwm_ops_t s_pwm_ops = {
 #if defined(PM_ENABLE_TONE)
 /* ------------------------------------------------------------------ TONE */
 
-static uint8_t  s_tone_open[MOCK_TONE_COUNT];
 static uint8_t  s_tone_active[MOCK_TONE_COUNT];
 static uint32_t s_tone_freq[MOCK_TONE_COUNT];
 static uint16_t s_tone_duty[MOCK_TONE_COUNT];
@@ -576,6 +587,12 @@ static pm_err_t mock_tone_open(void *ctx, pm_tone_t *t, const pm_tone_cfg_t *cfg
     if (s_tone_open[cfg->hw_id] != 0u) {
         return PM_ERR_BUSY;
     }
+#if defined(PM_ENABLE_PWM)
+    if ((cfg->hw_id == 0u) && (s_pwm_tone_shared < MOCK_PWM_COUNT) &&
+        (s_pwm_open[s_pwm_tone_shared] != 0u)) {
+        return PM_ERR_CONFLICT;      /* the PWM channel already drives this pin */
+    }
+#endif
 
     s_tone_open[cfg->hw_id]   = 1u;
     s_tone_active[cfg->hw_id] = 1u;
@@ -849,6 +866,7 @@ void mock_reset(void)
     memset(s_pwm_enabled, 0, sizeof(s_pwm_enabled));
     memset(s_pwm_freq, 0, sizeof(s_pwm_freq));
     memset(s_pwm_duty, 0, sizeof(s_pwm_duty));
+    s_pwm_tone_shared = 0xFFu;
 #endif
 
 #if defined(PM_ENABLE_TONE)
@@ -1064,6 +1082,11 @@ uint16_t mock_pwm_duty(uint8_t hw_id)
 int mock_pwm_is_enabled(uint8_t hw_id)
 {
     return (hw_id < MOCK_PWM_COUNT) ? (int)s_pwm_enabled[hw_id] : 0;
+}
+
+void mock_pwm_share_tone_pin(uint8_t pwm_id)
+{
+    s_pwm_tone_shared = pwm_id;
 }
 
 #endif /* PM_ENABLE_PWM */
