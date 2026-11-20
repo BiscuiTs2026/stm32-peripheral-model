@@ -19,21 +19,30 @@ jobs:
         run: cmake -S tests/host -B build-host
       - name: 构建
         run: cmake --build build-host --config Release
-      - name: 运行
-        run: build-host\Release\pm_host_tests.exe
+      - name: 运行（CTest）
+        run: ctest --test-dir build-host -C Release --output-on-failure
 
   firmware:
     name: 固件构建
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: 安装 arm-none-eabi-gcc
+      - name: 安装构建工具
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            gcc-arm-none-eabi libnewlib-arm-none-eabi ninja-build
+          sudo apt-get install -y --no-install-recommends ninja-build
+      - name: 下载固定版本 arm-none-eabi-gcc（14.3.rel1）
+        # 与 README「构建」声明的 14.x 对齐；升级时同步改这里的版本号与 README。
+        run: |
+          curl -fsSL -o /tmp/arm-gnu.tar.xz \
+            https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi.tar.xz
+          tar -xJf /tmp/arm-gnu.tar.xz -C "$GITHUB_WORKSPACE"
+          "$GITHUB_WORKSPACE/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-gcc" --version | head -1
       - name: 配置
-        run: cmake -S . -B build-arm -G Ninja -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/arm-gcc-toolchain.cmake"
+        run: |
+          cmake -S . -B build-arm -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/arm-gcc-toolchain.cmake" \
+            -DTOOLCHAIN_ROOT="$GITHUB_WORKSPACE/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi/bin"
       - name: 构建
         run: cmake --build build-arm
 

@@ -7,6 +7,41 @@
 当前版本 **v0.6**，配套 STM32F103C8T6 最小系统板（72 MHz、20 KB RAM、64 KB Flash）。
 已实现 GPIO、UART、SPI（主机全双工，中断 + 可选 DMA）、I2C（主机，中断状态机，支持写读合并；repeated START 仅适用于寄存器型器件）、ADC（单通道单次转换，EOC 中断）、PWM（定时器比较输出）、软件音调（TIM3 中断翻转）、循迹（单路数字量）、正交编码器（AB x4，可选按键输入）、继电器（单路 GPIO，极性必填）、电机（DRV8833 形态，双 PWM 输入，含滑行/刹车两种停止）与舵机（角度↔脉宽映射，独立成模型）。
 
+> **使用前必读**：`include/pm/*.h` 里的 `struct pm_xxx` 字段（`magic`、`state` 等）是公开可见的——
+> 对象由调用方静态分配。但**结构体布局不承诺 ABI 稳定**：跨版本不要按字段偏移序列化，
+> 也不要直接改字段。`PM_ERR_BUSY` / `PM_ERR_STATE` 等生命周期校验依赖 `magic`/`state`，
+> 手改字段会让校验失效、行为不可预期。只使用 `pm_*()` 接口。
+
+## 快速开始
+
+不需要硬件，也不需要 ARM 工具链：
+
+```powershell
+git clone https://github.com/BiscuiTs2026/stm32-peripheral-model.git
+cd stm32-peripheral-model
+cmake -S tests/host -B build-host
+cmake --build build-host --config Debug
+ctest --test-dir build-host -C Debug --output-on-failure
+```
+
+期望输出 `681 checks, 0 failure(s)`，退出码 0。
+
+最小单测示例（加到 `tests/host/test_main.c`，并在 `main()` 里调用）：
+
+```c
+static void test_ringbuf_minimal(void)
+{
+    uint8_t storage[8];
+    pm_ringbuf_t rb;
+
+    CHECK(pm_rb_init(&rb, storage, 8) == PM_OK);
+    CHECK(pm_rb_free(&rb) == 7);    /* 8 字节缓冲留一格区分空/满 */
+    CHECK(pm_rb_used(&rb) == 0);
+}
+```
+
+`CHECK` 宏自己计数，失败时打印文件名与行号；断言总数变化时同步更新 README 里的 681。
+
 ## 能做什么
 
 - 驱动 GPIO、UART、SPI（主机全双工）、I2C（主机，可选错误分类计数）、ADC（单通道单次）、
@@ -139,6 +174,58 @@ third_party/            CMSIS 与 ST HAL 子集（BSD-3-Clause，原样分发）
 
 ---
 
+## 接进已有工程
+
+三个约定先记住：
+
+1. **包含路径是 `-Iinclude/pm`，不是 `-Iinclude`**。公开头之间用 `#include "pm_common.h"`
+   这类同目录写法，必须把 `${PM_ROOT}/include/pm` 加进 include path；`${PM_ROOT}/include`
+   一并加上（个别头会引用它）。
+2. **要编译的目录**：`src/common/`（纯逻辑）、`src/core/`（模型）、`src/osal/`（时间与临界区）、
+   `src/port/stm32f1/`（HAL 后端）与 `platform/stm32f103/`（引脚表等）。
+3. **两处接缝要实现**：`pm_port_get()` 返回各外设的 ops 表（定义见 `include/pm/pm_port.h`）；
+   OSAL 直接用 `src/osal/pm_osal_port_cm3.c`（Cortex-M3），换架构另写一份
+   （`pm_osal_*` 契约见 `docs/00-contract.md` §9）。
+
+CMake 最小集成（假设本仓 vendored 到 `third_party/stm32-peripheral-model`）：
+
+```cmake
+set(PM_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/stm32-peripheral-model")
+
+file(GLOB PM_CORE   ${PM_ROOT}/src/core/*.c)
+file(GLOB PM_COMMON ${PM_ROOT}/src/common/*.c)
+
+add_library(pm STATIC
+    ${PM_CORE} ${PM_COMMON}
+    ${PM_ROOT}/src/osal/pm_osal_port_cm3.c
+    ${PM_ROOT}/src/port/stm32f1/pm_port_stm32f1.c
+    ${PM_ROOT}/platform/stm32f103/board_f103c8.c
+    ${PM_ROOT}/platform/stm32f103/pm_platform.c
+)
+target_include_directories(pm PUBLIC
+    ${PM_ROOT}/include/pm
+    ${PM_ROOT}/include
+    ${PM_ROOT}/platform/stm32f103
+)
+target_compile_definitions(pm PUBLIC USE_HAL_DRIVER STM32F103xB)
+# HAL/CMSIS 的头路径与链接脚本见本仓 CMakeLists.txt，按你的工程改
+```
+
+APP 侧只 include 公共头与板级表：
+
+```c
+#include "pm_uart.h"
+#include "board_f103c8.h"
+```
+
+- 换板子只改 `platform/stm32f103/board_f103c8.c` 的引脚表，其余不动
+  （[01-layering.md §9](docs/01-layering.md)）；
+- 换芯片新写 `src/port/<chip>/` 与一份 OSAL，`src/core` 与 `include/pm` 不动（§10）；
+- 只做主机测试时不需要 HAL：照 `tests/host/CMakeLists.txt`，用 `pm_port_mock.c` +
+  `pm_osal_host.c` 顶替后端。
+
+---
+
 ## 构建
 
 工具链：`arm-none-eabi-gcc` 14.x、CMake ≥ 3.20、Ninja。
@@ -170,9 +257,10 @@ cmake --build build-arm
 ```powershell
 cmake -S tests/host -B build-host
 cmake --build build-host --config Debug
-./build-host/Debug/pm_host_tests.exe
+ctest --test-dir build-host -C Debug --output-on-failure
 ```
 
+`ctest` 与直接跑 `build-host/Debug/pm_host_tests.exe` 等价，二者之一即可；
 输出形如 `681 checks, 0 failure(s)`，退出码 0 表示全过。
 
 ---
@@ -530,9 +618,12 @@ python3 tools/check_layering.py . --roles .arch-roles
 
 | 作业 | Runner | 内容 |
 | --- | --- | --- |
-| 主机单测 | windows-latest | 构建并运行 `tests/host`，断言失败即非零退出 |
-| 固件构建 | ubuntu-latest | `gcc-arm-none-eabi` + CMake/Ninja 构建 `pm_f103_demo` |
+| 主机单测 | windows-latest | 构建 `tests/host`，用 `ctest` 运行；失败即非零退出 |
+| 固件构建 | ubuntu-latest | 固定下载 **GCC 14.3.rel1**（`arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi`，经 `TOOLCHAIN_ROOT` 传入）+ CMake/Ninja 构建 `pm_f103_demo` |
 | 四层架构检查 | ubuntu-latest | 先 `--version --lock` 校验无漂移，再扫描；任一步非零即失败 |
+
+CI 的固件工具链钉在 14.3.rel1，与本地 `gnu-tools-for-stm32 14.3.1+st.2`（ST 打包）同主版本；
+若该下载地址日后失效，需同步改 `ci.yml` 与本节，不要让版本静默漂移。
 
 **项目约定：编译告警即错误，不许为"编过"关掉。** 主机单测用 `/W4`（MSVC）或
 `-Wall -Wextra -Wshadow -Werror`（GCC），固件构建同样把隐式声明当错误。v0.5 就有一个

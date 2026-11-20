@@ -1,0 +1,12 @@
+# 统一行尾：源码与文档一律 LF（提交与检出都是），避免跨平台 CRLF 噪音。
+* text=auto eol=lf
+
+# 二进制：不做行尾转换、不做 diff。
+*.bin   binary
+*.hex   binary
+*.elf   binary
+*.a     binary
+*.o     binary
+*.png   binary
+*.jpg   binary
+*.pdf   binary

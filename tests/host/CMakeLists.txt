@@ -49,3 +49,6 @@ if(MSVC)
 else()
     target_compile_options(pm_host_tests PRIVATE -Wall -Wextra -Wshadow -Werror)
 endif()
+
+enable_testing()
+add_test(NAME pm_host_tests COMMAND pm_host_tests)
