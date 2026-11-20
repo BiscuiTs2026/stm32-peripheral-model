@@ -1107,8 +1107,10 @@ PB15 同时是 SPI2_MOSI 的复用脚：按键与 `BOARD_SPI_2` **互斥**，不
   `owner_id`）；表满返回 `PM_ERR_NOMEM`；`pm_timer_claim_at()` 按 index 取回 `owner_id`
   与配置，越界返回 `PM_ERR_RANGE`；探测为真时 `claim`/`check` 返回 `PM_ERR_BUSY`，而表内
   不兼容占用仍返回 `PM_ERR_CONFLICT`——两种拒绝在同一轮里可区分。
-- 板上：舵机（TIM4）+ 音调（TIM3）应同时可用；把音调的 `hw_id` 改成 4（TIM4）再 `init`
-  → 期望 `PM_ERR_CONFLICT`。【待实测】
+- 板上（2026-11-20，板端仓 `e57402f` / `3c1b932`，INDEX §144/§145）：TIM4（舵机）与 TIM3
+  （音调）同时可用；`MOTOR claims` 查到 TIM2 两条 claim（owner 33/34）与 TIM4 一条（owner 36）；
+  同一 `hw_id` 的 TONE 角色二次申请回 `PM_ERR_CONFLICT`；`PWM buz` 占着 TIM3 时申请回
+  `PM_ERR_BUSY`；外部置 `CR1.CEN` 回 `PM_ERR_BUSY`，外部置 AFIO `TIM2_REMAP` 回 `PM_ERR_STATE`。
 
 ### 20.7 外部占用探测（v0.6 新增）
 
@@ -1141,11 +1143,14 @@ void pm_timer_set_probe(pm_timer_probe_fn fn, void *ctx);
   对应重映射位非 0；未知 `hw_id` 一律返回 `true`（不认识就不接管）。
 - **本板实现**（`pm_port_stm32f1.c`）：`hw_id` **2/3/4** 直接对应 TIM2/TIM3/TIM4
   （取值即定时器序号，日志与参考手册读法一致）；该探测在 `pm_port_get()` 里安装一次。
-- **板端现状**：检查已从 `pm_motor_stm32f1.c` 抽出为独立函数 `pm_timer_probe()`；
-  `AFIO->MAPR` 查的是 `TIM2_REMAP` 的**全 2 位字段**（不是只查 `TIM2_REMAP_0`，
-  只置高位的组合同样算外部重配）；覆盖 TIM2/TIM3/TIM4 三颗。
-- **运行期占用表延后（决策 0018 第 5 条）**：板端当前只有探测，没有 claim/release/retime
-  表；§20.2/20.3 的表是本模型仓的实现，板端接入留独立一轮，探测与表不混做。
+- **板端现状**：探测已集中到 `src/port/stm32f1/pm_timer_stm32f1.c` 的 `pm_f1_timer_busy_bits()`，
+  由 `pm_f1_timer_probe_install()` 安装到模型；`AFIO->MAPR` 查的是 `TIM2_REMAP` 的**全 2 位字段**
+  （不是只查 `TIM2_REMAP_0`，只置高位的组合同样算外部重配）；覆盖 TIM2/TIM3/TIM4 三颗。
+  TIM2 端口用 `pm_f1_timer_busy_bits()` 把 `PM_ERR_BUSY` 细分为 `err=timer`（CEN）与
+  `err=remap`（REMAP），可见回包语义不变。
+- **运行期占用表已接入（2026-11-20，替代决策 0018 第 5 条的"延后"）**：板端 `e57402f` 把
+  v0.8.0 的 `include/pm/pm_timer.h`、`src/common/pm_timer.c` 逐字引入，TIM2/TIM4 的 init 走
+  `claim/release/retime`；探测与表并存，探测只用于上面的错误细分，INDEX §144。
 - 与 20.5 的关系：外部占用属于 `PM_ERR_BUSY`（v0.8.0 起；v0.7.1 及之前误归
   `PM_ERR_CONFLICT`）。它不是 `PM_ERR_DISABLED`（那是指功能被设计性关闭），也不该被当成
   可重试的 `PM_ERR_CONFLICT`：外部使用者不归本模型管，重试多少次都不会变。
@@ -1177,6 +1182,7 @@ void pm_timer_set_probe(pm_timer_probe_fn fn, void *ctx);
 | NTC 方向 | 手指捏住后 ADC 原始值 2293 → 1792 单调下降 | 板端已验证（§13.7） |
 | PWM 0‰/1000‰ 与停止电平 | 无板端证据 | 未验证（§14.6 中标注【待实测】） |
 | 音调/PWM 在 PB9 上的互斥 | 无板端证据 | 未验证（代码写死，主机单测以 mock 覆盖） |
+| 定时器 claim 表（v0.8.0） | 板端：`MOTOR claims` 两条 TIM2（owner 33/34）+ 一条 TIM4（owner 36）；同 `hw_id` 二次申请 → `conflict`；`PWM buz` 占 TIM3 时 → `busy`；`MOTOR force timer\|remap` → `err=timer` / `err=remap`（INDEX §144/§145） | 板端已验证四条判据；`force` 为调试注入，不证明真实外部设备会主动让出 |
 
 ### 21.3 维护规则
 

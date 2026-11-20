@@ -167,9 +167,10 @@ v0.4 的 Flash 增量来自 HAL ADC（`HAL_ADC_Init`、`HAL_ADC_Start_IT`、
 ## 已集成案例：真实固件上板
 
 本仓不只停在"设计背书"：PWM 通道、电机、编码器、继电器、循迹、超声六条链已被真实固件接入，
-并在 F103C8T6 板子上跑过。证据来自板端仓 `BiscuiTs2026/stm32f103-bringup` 的提交
+并在 F103C8T6 板子上跑过；v0.8.0 的定时器占用表也已接入 TIM2/TIM4，并在板上真触发过
+冲突与外部忙两类失败。证据来自板端仓 `BiscuiTs2026/stm32f103-bringup` 的提交
 `faef317`（PWM / 电机）、`25e3ea0`（编码器）、`25ee15c`（relay / track）、`eba1e16`（sonar）、
-`d72eba8`（brake）。
+`d72eba8`（brake）与 `e57402f` / `3c1b932`（TIM2/TIM4 claim 表与故障注入诊断）。
 
 **集成方式**
 
@@ -179,7 +180,10 @@ v0.4 的 Flash 增量来自 HAL ADC（`HAL_ADC_Init`、`HAL_ADC_Start_IT`、
 - 板端用自有 TIM2 实现 `pm_pwm_ops_t`，PSC/ARR 计算仍走本仓 `pm_pwm_math`；
   电机链改为调用本仓 `pm_motor`；
 - 编码器、继电器、循迹、超声随后按同样方式改走本仓 core，替换掉板端原来的自有实现；
-  各自的时序/中断后端仍由板端提供。
+  各自的时序/中断后端仍由板端提供；
+- 定时器占用表：板端把 v0.8.0（`0e56b1c`）的 `include/pm/pm_timer.h`、`src/common/pm_timer.c`
+  逐字引入，TIM2（电机）与 TIM4（舵机）的 init 改走 `pm_timer_claim/release/retime`；
+  板端原有只读探测保留，只用于把 `PM_ERR_BUSY` 细分为 `err=timer` / `err=remap`。
 
 **分级实测（引用时不要压成一句"已验证"）**
 
@@ -191,16 +195,36 @@ v0.4 的 Flash 增量来自 HAL ADC（`HAL_ADC_Init`、`HAL_ADC_Start_IT`、
 | 继电器 / 循迹 | `25ee15c` | 只验到编译通过、原有命令回包不变；极性对应的实际通断、循迹判向与真实赛道**未验** |
 | 超声 | `eba1e16` | 已上板，`DIST` 有读数；但读数对应的真实距离未人工确认（同位置 11-19 版读 ~99 cm、新版读 ~6 cm，差异未解释），与编码器的真并发也未测（无人转轮） |
 
-**尺寸（板端整机）**：默认配置（`PM_ENABLE_ENCODER=ON`、`PM_ENABLE_SONAR=OFF`，含 `brake`）
-**FLASH 31316 B / RAM 5448 B**；路径为 Flash 28644 → 30168（电机）→ 31248（编码器 +1080）
-→ 31316（brake +68），RAM 3368 → 5448 的增量主要来自编码器与 relay/track 的状态。
-`PM_ENABLE_SONAR=ON` 组合为 **32084 B / 5472 B**，比默认多 836 / 24。
-提醒：这些是板端整机数字，不是本仓 demo 的 28536 B / 3376 B（demo 见上表）。
+**定时器占用表（v0.8.0，`e57402f` / `3c1b932`）**
+
+| 项 | 板端回包 | 证明了什么 |
+| --- | --- | --- |
+| 表内容 | `MOTOR claims t2=2 o=33 r=pwm psc=0 arr=3599 ch=0x01 o=34 r=pwm psc=0 arr=3599 ch=0x02 t3=0 t4=1 o=36 r=pwm psc=21 arr=65453 ch=0x04` | TIM2 两条（owner 33/34 = 0x21/0x22，电机 CH1/CH2）与 TIM4 一条（owner 36 = 0x24，舵机 CH3）确实由真实外设 init 登记，不是 mock 造出来的表项 |
+| 内部冲突 | `MOTOR conflict t2=conflict t4=ok rel=ok` | 电机仍持 TIM2 时，以另一 owner / TONE 角色二次申请同一 `hw_id` 被拒为 `PM_ERR_CONFLICT`，不静默覆盖电机时基；同 PSC/ARR 的 TIM4 CH4 兼容申请成功并正常释放 |
+| 外部占用 | 先 `PWM buz 4000`，再申请 TIM3 → `MOTOR busy t3=busy rel=state` | 表外已启动的 TIM3 被端口探测为忙，返回 `PM_ERR_BUSY`；无 claim 可释放，`release` 回 `PM_ERR_STATE` |
+| CEN 裸占用 | `MOTOR err=timer` + `MOTOR force mode=cen bits=1 claims=2->2` | 外部置 `CR1.CEN` 后走 `PM_ERR_BUSY` 判据；注入结束 claim 数 2→2，表还原 |
+| remap 裸占用 | `MOTOR err=remap` + `MOTOR force mode=remap bits=2 claims=2->2` | 外部置 AFIO `TIM2_REMAP` 后走 `PM_ERR_STATE` 判据；`mapr` 回 0，故障前后 MOTOR 与舵机命令逐字一致 |
+
+这行证据的意义：模型的冲突判据确实被**真实外设的调用路径**执行过。板端 `pm_pwm` 的 TIM2/TIM4
+open 直接调 v0.8.0 的 `pm_timer_claim()`，回包能按 `owner_id` 反查到两条电机 claim 和一条舵机
+claim；内部不兼容占用、表外已启动、CEN、remap 四条分支也都在板上各触发过一次，而不是只有
+主机单测的 mock 覆盖。`MOTOR force timer|remap` 是**仅调试用**入口，生产固件不应依赖
+（板端 INDEX §145）。
+
+**尺寸（板端整机）**：板端 `e57402f`（TIM2/TIM4 接入 v0.8.0 claim 表，
+`-DPM_ENABLE_SONAR=ON`）**FLASH 35032 B / RAM 6040 B**；`3c1b932`（在其上加
+`MOTOR force timer|remap` 诊断入口，同一配置）**35968 B / 6048 B**（较 `e57402f`
++936 / +8）。接入 claim 表时相对板端上一版 33136 / 5504 B 为 +1896 / +536 B。
+提醒：这些是**板端整机数字**，不是本仓 demo 的 `28540 B / 3376 B`（demo 见上表）；
+本节此前引用的默认配置 31316 B / 5448 B 与 sonar 组合 32084 B / 5472 B 是 claim 表
+接入之前的整机值，已不代表当前集成，本轮未重测 `PM_ENABLE_SONAR=OFF` 组合。
 
 **边界**
 
 - 六条链路的验证深度见上表：只有 PWM 通道与编码器到了"逐条一致"；继电器/循迹只到编译与回包；
   超声有读数但未校准；电机只到寄存器读回；
+- 占用表只验到"四条判据各触发一次、claim 表与寄存器恢复干净"；`MOTOR force` 是调试注入，
+  不证明真实外部设备会主动让出定时器；
 - `stop(BRAKE)` 在模型侧就是两路 1000‰；板端已补 `MOTOR brake`，寄存器层可证，
   机械制动效果未验；
 - 软件音调仍是板端自有实现；舵机角度精度与蜂鸣器听感未验。
